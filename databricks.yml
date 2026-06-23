@@ -43,7 +43,7 @@ resources:
 
       email_notifications:
         on_failure:
-          - data-engineering@company.com
+          - pratikhyamanas@gmail.com
         on_success: []
 
       # Serverless environment — pip dependencies available to all tasks
@@ -194,7 +194,7 @@ resources:
 
       email_notifications:
         on_failure:
-          - data-engineering@company.com
+          - pratikhyamanas@gmail.com
 
       job_clusters:
         - job_cluster_key: streaming_cluster
@@ -236,7 +236,7 @@ resources:
 
       email_notifications:
         on_failure:
-          - data-engineering@company.com
+          - pratikhyamanas@gmail.com
 
       job_clusters:
         - job_cluster_key: cdc_cluster
@@ -280,7 +280,7 @@ resources:
 
       email_notifications:
         on_failure:
-          - data-engineering@company.com
+          - pratikhyamanas@gmail.com
 
       environments:
         - environment_key: maintenance_env
@@ -330,7 +330,7 @@ resources:
 
       email_notifications:
         on_failure:
-          - data-engineering@company.com
+          - pratikhyamanas@gmail.com
 
       environments:
         - environment_key: ml_env
