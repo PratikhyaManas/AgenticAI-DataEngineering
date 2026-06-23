@@ -1,0 +1,108 @@
+# ==============================================================================
+# REST API Source Configuration — Example Template
+# Agent: Data Ingestion Agent
+#
+# Used by: src/ingestion/rest/rest_api_ingestion.py
+#
+# Copy this file and fill in your API details.
+# File naming convention: configs/sources/{source_id}.yaml
+# ==============================================================================
+
+source_id: rest_api_example          # Must match the --source_id argument passed to the job
+
+# ------------------------------------------------------------------
+# API connection
+# ------------------------------------------------------------------
+base_url: "https://api.example.com"
+endpoint: "/v2/orders"               # Appended to base_url
+
+# ------------------------------------------------------------------
+# Authentication
+# Supported types: bearer | api_key | oauth2 | none
+# Credentials are read from Databricks secrets, NOT stored here.
+#
+# Databricks secret scopes:
+#   REST_API_BEARER_TOKEN  → Databricks secret: scope=rest-api, key=bearer-token
+#   REST_API_KEY           → Databricks secret: scope=rest-api, key=api-key
+# ------------------------------------------------------------------
+auth:
+  type: bearer                        # bearer | api_key | oauth2 | none
+  # For 'bearer':  reads DATABRICKS_SECRET_SCOPE/rest-api-bearer-token
+  # For 'api_key': reads DATABRICKS_SECRET_SCOPE/rest-api-api-key; placed in header
+  #   header_name: "X-API-Key"
+  # For 'oauth2':
+  #   token_url: "https://auth.example.com/oauth/token"
+  #   client_id_secret: "rest-api-client-id"
+  #   client_secret_secret: "rest-api-client-secret"
+  #   scopes: "orders:read customers:read"
+
+# ------------------------------------------------------------------
+# Pagination strategy
+# Supported modes: offset_limit | cursor | link_header
+# ------------------------------------------------------------------
+pagination:
+  mode: offset_limit                  # offset_limit | cursor | link_header
+
+  # --- offset_limit ---
+  offset_param: "offset"             # Query parameter name for offset
+  limit_param:  "limit"              # Query parameter name for page size
+  page_size:    200                  # Records per page (tune to API max)
+  total_path:   "meta.total_count"  # JSON path to total record count
+                                     # (omit if API doesn't return total)
+
+  # --- cursor (alternative) ---
+  # cursor_param:   "cursor"
+  # cursor_path:    "next_cursor"     # JSON path to next cursor in response
+  # cursor_end_val: null              # Value indicating last page
+
+  # --- link_header (alternative, RFC 5988) ---
+  # link_header_rel: "next"           # Link relation type to follow
+
+# ------------------------------------------------------------------
+# Data extraction
+# ------------------------------------------------------------------
+data_path: "data"                    # JSON path to records array in response
+                                     # Use "." for root-level array
+
+# ------------------------------------------------------------------
+# Watermark / incremental ingestion
+# If set, only records newer than the last successful run are fetched.
+# Checkpoint is stored in the Bronze Delta table's max(watermark_col).
+# ------------------------------------------------------------------
+watermark:
+  enabled: true
+  column: "updated_at"               # Field in API response to use as watermark
+  filter_param: "updated_after"      # Query parameter name sent to API
+  format: "iso8601"                  # iso8601 | unix_ms | unix_s
+
+# ------------------------------------------------------------------
+# HTTP client settings
+# ------------------------------------------------------------------
+http:
+  timeout_seconds: 30
+  max_retries: 5
+  backoff_factor: 0.5                # Exponential backoff: 0.5s, 1s, 2s, 4s...
+  # HTTP status codes that trigger a retry
+  retry_on_status: [429, 500, 502, 503, 504]
+
+# ------------------------------------------------------------------
+# Output (Bronze Delta table)
+# ------------------------------------------------------------------
+target:
+  catalog: "{env}_lakehouse"         # {env} substituted at runtime
+  schema: "bronze"
+  table: "rest_api_orders"
+  partition_by: ["ingestion_date"]   # Optional partition column
+
+# ------------------------------------------------------------------
+# Schema hints (optional — enables stricter schema enforcement)
+# If omitted, all fields are stored as strings in a _json column
+# and parsed lazily by downstream Silver jobs.
+# ------------------------------------------------------------------
+# schema:
+#   order_id:   long
+#   customer_id: string
+#   total:       double
+#   currency:    string
+#   status:      string
+#   updated_at:  timestamp

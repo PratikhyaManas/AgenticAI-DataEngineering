@@ -1,0 +1,73 @@
+# ==============================================================================
+# ML Configuration — Sales Forecasting Pipeline
+# Agent: MLOps / ML Agent
+#
+# Used by: src/ml/feature_engineering.py, src/ml/model_training.py
+# ==============================================================================
+
+# ------------------------------------------------------------------
+# MLflow Experiment & Model Registry
+# ------------------------------------------------------------------
+mlflow:
+  experiment_name: "/lakehouse/{env}/sales_forecasting"       # {env} substituted at runtime
+  model_name: "lakehouse_{env}_clv_forecast"
+  tracking_uri: "databricks"                                  # use workspace MLflow server
+
+# ------------------------------------------------------------------
+# Feature Store table paths (Unity Catalog: catalog.schema.table)
+# ------------------------------------------------------------------
+feature_store:
+  customer_features: "{env}_lakehouse.features.customer_features"
+  product_features:  "{env}_lakehouse.features.product_features"
+  primary_keys:
+    customer_features: ["customer_sk"]
+    product_features:  ["product_sk"]
+  timestamp_keys:
+    customer_features: ["feature_ts"]
+    product_features:  ["feature_ts"]
+
+# ------------------------------------------------------------------
+# Feature engineering parameters
+# ------------------------------------------------------------------
+feature_engineering:
+  # Minimum number of historical orders for a customer to be included in training
+  min_orders_threshold: 3
+  # CLV windows (days)
+  clv_windows: [30, 90, 365]
+  # Lookback window for feature computation (days)
+  feature_lookback_days: 365
+
+# ------------------------------------------------------------------
+# Model training hyperparameters
+# ------------------------------------------------------------------
+model_training:
+  label_col: "clv_30d"
+  feature_cols:
+    - order_count_30d
+    - order_count_90d
+    - order_count_365d
+    - avg_order_value
+    - avg_discount
+    - days_since_last_order
+    - total_units_purchased
+
+  train_test_split: 0.8           # 80% train, 20% test
+  random_seed: 42
+  n_folds: 3                      # Cross-validation folds
+
+  gbt:
+    max_iter_values: [20, 50, 100]
+    max_depth_values: [3, 5, 7]
+    min_instances_per_node: 5
+    step_size: 0.1
+
+# ------------------------------------------------------------------
+# Model promotion thresholds
+# Auto-promote to Staging if test RMSE < threshold
+# Auto-promote to Production if RMSE improved > improvement_pct vs current prod
+# ------------------------------------------------------------------
+promotion:
+  staging_rmse_threshold: 500.0       # USD; reject if RMSE > this
+  production_improvement_pct: 0.05    # 5% RMSE improvement required vs current prod
+  auto_promote_to_staging: true
+  auto_promote_to_production: false   # Require manual approval for production

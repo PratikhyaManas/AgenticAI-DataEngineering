@@ -263,6 +263,211 @@ resources:
           timeout_seconds: 0         # No timeout for continuous streaming job
           max_retries: -1            # Always restart on failure
 
+    # ---------------------------------------------------------------------------
+    # Databricks Workflow: CDC Ingestion (Debezium → Event Hubs → Bronze)
+    # Dedicated cluster — Maven Event Hubs connector required (same as streaming)
+    # ---------------------------------------------------------------------------
+    cdc_debezium_pipeline:
+      name: "lakehouse-cdc-debezium-${var.env}"
+      description: "Continuous CDC ingestion from Azure SQL via Debezium + Event Hubs"
+      max_concurrent_runs: 1
+
+      email_notifications:
+        on_failure:
+          - data-engineering@company.com
+
+      job_clusters:
+        - job_cluster_key: cdc_cluster
+          new_cluster:
+            spark_version: "14.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 2
+            spark_conf:
+              "spark.databricks.delta.preview.enabled": "true"
+              "spark.lakehouse.storage_account": "${var.storage_account}"
+            azure_attributes:
+              availability: ON_DEMAND_AZURE
+
+      tasks:
+        - task_key: cdc_ingest_sales_orders
+          job_cluster_key: cdc_cluster
+          spark_python_task:
+            python_file: "src/ingestion/cdc/debezium_cdc_ingestion.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--source_id"
+              - "cdc_sql_sales"
+          libraries:
+            - maven:
+                coordinates: com.microsoft.azure:azure-eventhubs-spark_2.12:2.3.22
+          timeout_seconds: 0
+          max_retries: -1
+
+    # ---------------------------------------------------------------------------
+    # Databricks Workflow: Delta Maintenance (OPTIMIZE + VACUUM + Monitor Refresh)
+    # Weekly schedule — runs Sunday 03:00 UTC off-peak
+    # ---------------------------------------------------------------------------
+    delta_maintenance:
+      name: "lakehouse-delta-maintenance-${var.env}"
+      description: "Weekly OPTIMIZE, VACUUM, and Lakehouse Monitor refresh"
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0 3 ? * SUN"
+        timezone_id: UTC
+
+      email_notifications:
+        on_failure:
+          - data-engineering@company.com
+
+      environments:
+        - environment_key: maintenance_env
+          spec:
+            client: "1"
+            dependencies:
+              - pyyaml==6.0.1
+
+      tasks:
+        - task_key: optimize_vacuum
+          description: "OPTIMIZE + VACUUM all managed Delta tables"
+          environment_key: maintenance_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
+            "spark.databricks.delta.vacuum.parallelDelete.enabled": "true"
+          spark_python_task:
+            python_file: "src/monitoring/lakehouse_monitor.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--action"
+              - "maintenance"
+          timeout_seconds: 7200
+          max_retries: 1
+
+        - task_key: refresh_monitors
+          description: "Refresh Lakehouse Monitor metrics after optimization"
+          depends_on:
+            - task_key: optimize_vacuum
+          environment_key: maintenance_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
+          spark_python_task:
+            python_file: "src/monitoring/lakehouse_monitor.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--action"
+              - "detect_drift"
+          timeout_seconds: 3600
+
+    # ---------------------------------------------------------------------------
+    # Databricks Workflow: Feature Engineering + ML Training
+    # Daily after the batch pipeline completes
+    # ---------------------------------------------------------------------------
+    ml_pipeline:
+      name: "lakehouse-ml-pipeline-${var.env}"
+      description: "Feature engineering → Model training → MLflow registration"
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0 5 * * ?"    # 05:00 UTC daily (after batch at 01:00)
+        timezone_id: UTC
+
+      email_notifications:
+        on_failure:
+          - data-engineering@company.com
+
+      environments:
+        - environment_key: ml_env
+          spec:
+            client: "1"
+            dependencies:
+              - mlflow==2.13.0
+              - scikit-learn==1.4.2
+              - databricks-feature-store==0.17.0
+              - pyyaml==6.0.1
+
+      tasks:
+        - task_key: compute_customer_features
+          description: "Compute and register customer features to Feature Store"
+          environment_key: ml_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
+          spark_python_task:
+            python_file: "src/ml/feature_engineering.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--entity"
+              - "customers"
+          timeout_seconds: 3600
+
+        - task_key: compute_product_features
+          description: "Compute and register product features to Feature Store"
+          environment_key: ml_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
+          spark_python_task:
+            python_file: "src/ml/feature_engineering.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--entity"
+              - "products"
+          timeout_seconds: 3600
+
+        - task_key: train_clv_model
+          description: "Train GBT CLV forecasting model and register to MLflow"
+          depends_on:
+            - task_key: compute_customer_features
+            - task_key: compute_product_features
+          environment_key: ml_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
+          spark_python_task:
+            python_file: "src/ml/model_training.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--action"
+              - "train"
+          timeout_seconds: 7200
+          max_retries: 1
+
+    # ---------------------------------------------------------------------------
+    # Databricks Workflow: Delta Sharing Setup (run once per environment)
+    # ---------------------------------------------------------------------------
+    delta_sharing_setup:
+      name: "lakehouse-delta-sharing-setup-${var.env}"
+      description: "Idempotent Delta Sharing provisioning (shares, recipients, grants)"
+      max_concurrent_runs: 1
+
+      environments:
+        - environment_key: governance_env
+          spec:
+            client: "1"
+            dependencies:
+              - pyyaml==6.0.1
+
+      tasks:
+        - task_key: setup_shares
+          environment_key: governance_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
+          spark_python_task:
+            python_file: "src/governance/delta_sharing.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--action"
+              - "setup"
+          timeout_seconds: 1800
+
 # ---------------------------------------------------------------------------
 # Per-environment target overrides
 # ---------------------------------------------------------------------------
