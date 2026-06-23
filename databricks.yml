@@ -50,7 +50,6 @@ resources:
       environments:
         - environment_key: lakehouse_env
           spec:
-            client: "1"             # DBR serverless client version
             dependencies:
               - pyyaml==6.0.1
               - applicationinsights==0.11.10
@@ -286,7 +285,6 @@ resources:
       environments:
         - environment_key: maintenance_env
           spec:
-            client: "1"
             dependencies:
               - pyyaml==6.0.1
 
@@ -337,7 +335,6 @@ resources:
       environments:
         - environment_key: ml_env
           spec:
-            client: "1"
             dependencies:
               - mlflow==2.13.0
               - scikit-learn==1.4.2
@@ -396,7 +393,6 @@ resources:
       environments:
         - environment_key: governance_env
           spec:
-            client: "1"
             dependencies:
               - pyyaml==6.0.1
 
