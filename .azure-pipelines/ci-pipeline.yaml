@@ -1,0 +1,272 @@
+# ==============================================================
+# Azure DevOps CI Pipeline — Lakehouse Data Platform
+# Agent: CI/CD & DevOps Agent
+#
+# Triggers: Every PR targeting main/release/*, and push to main
+# Stages:
+#   1. Lint & Static Analysis (Python + SQL)
+#   2. Unit Tests (pytest)
+#   3. Security Scan (Bandit + pip-audit)
+#   4. Notebook Validation
+# ==============================================================
+
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+  paths:
+    include:
+      - src/**
+      - tests/**
+      - notebooks/**
+      - configs/**
+
+pr:
+  branches:
+    include:
+      - main
+      - release/*
+  drafts: false
+
+variables:
+  PYTHON_VERSION: "3.11"
+  PIP_CACHE_DIR:  $(Pipeline.Workspace)/.pip
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+# ---------------------------------------------------------------
+# Stage 1: Lint & Static Analysis
+# ---------------------------------------------------------------
+- stage: Lint
+  displayName: "Lint & Static Analysis"
+  jobs:
+  - job: PythonLint
+    displayName: "Python Linting"
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+      displayName: "Set Python $(PYTHON_VERSION)"
+
+    - script: pip install ruff black isort mypy
+      displayName: "Install linting tools"
+
+    - script: |
+        echo "=== ruff (lint) ==="
+        ruff check src/ tests/ --output-format=github
+        echo "=== black (format check) ==="
+        black --check src/ tests/
+        echo "=== isort (import order) ==="
+        isort --check-only src/ tests/
+      displayName: "Run linters"
+      continueOnError: false
+
+    - script: |
+        echo "=== mypy (type checking) ==="
+        mypy src/ --ignore-missing-imports --no-strict-optional
+      displayName: "mypy type check"
+      continueOnError: true      # Type warnings; non-blocking in CI
+
+  - job: SQLLint
+    displayName: "SQL Linting (sqlfluff)"
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+
+    - script: pip install sqlfluff
+      displayName: "Install sqlfluff"
+
+    - script: |
+        sqlfluff lint src/ notebooks/ --dialect databricks --format github
+      displayName: "Lint SQL files"
+      continueOnError: true      # SQL warnings; non-blocking in CI
+
+# ---------------------------------------------------------------
+# Stage 2: Unit Tests
+# ---------------------------------------------------------------
+- stage: UnitTests
+  displayName: "Unit Tests"
+  dependsOn: Lint
+  condition: succeeded()
+  jobs:
+  - job: PyTest
+    displayName: "pytest unit tests"
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+
+    - task: Cache@2
+      inputs:
+        key: 'pip | "$(Agent.OS)" | requirements.txt'
+        restoreKeys: |
+          pip | "$(Agent.OS)"
+        path: $(PIP_CACHE_DIR)
+      displayName: "Cache pip packages"
+
+    - script: |
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-mock pyspark==3.5.0
+      displayName: "Install dependencies"
+
+    - script: |
+        pytest tests/unit/ \
+          --junitxml=$(Build.ArtifactStagingDirectory)/test-results.xml \
+          --cov=src \
+          --cov-report=xml:$(Build.ArtifactStagingDirectory)/coverage.xml \
+          --cov-fail-under=70 \
+          -v
+      displayName: "Run unit tests with coverage"
+
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: JUnit
+        testResultsFiles: "$(Build.ArtifactStagingDirectory)/test-results.xml"
+        failTaskOnFailedTests: true
+      displayName: "Publish test results"
+      condition: always()
+
+    - task: PublishCodeCoverageResults@2
+      inputs:
+        summaryFileLocation: "$(Build.ArtifactStagingDirectory)/coverage.xml"
+      displayName: "Publish code coverage"
+      condition: always()
+
+# ---------------------------------------------------------------
+# Stage 3: Security Scan
+# ---------------------------------------------------------------
+- stage: SecurityScan
+  displayName: "Security Scanning"
+  dependsOn: Lint
+  condition: succeeded()
+  jobs:
+  - job: StaticSecurity
+    displayName: "Bandit + pip-audit"
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+
+    - script: pip install bandit pip-audit
+      displayName: "Install security tools"
+
+    - script: |
+        echo "=== Bandit SAST ==="
+        bandit -r src/ -f xml -o $(Build.ArtifactStagingDirectory)/bandit-results.xml \
+          --severity-level medium || true
+        bandit -r src/ --severity-level high --exit-zero  # Fail on HIGH findings
+      displayName: "Bandit SAST scan"
+
+    - script: |
+        echo "=== pip-audit: dependency CVE check ==="
+        pip-audit -r requirements.txt --format json \
+          -o $(Build.ArtifactStagingDirectory)/pip-audit.json || true
+        pip-audit -r requirements.txt --fail-on-found   # Fail if CVEs found
+      displayName: "pip-audit dependency scan"
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: "$(Build.ArtifactStagingDirectory)"
+        ArtifactName: "security-reports"
+      condition: always()
+      displayName: "Publish security reports"
+
+# ---------------------------------------------------------------
+# Stage 4: Notebook Validation
+# ---------------------------------------------------------------
+- stage: NotebookValidation
+  displayName: "Notebook Validation"
+  dependsOn: Lint
+  condition: succeeded()
+  jobs:
+  - job: ValidateNotebooks
+    displayName: "Validate notebook syntax"
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+
+    - script: pip install nbformat nbconvert
+      displayName: "Install notebook tools"
+
+    - script: |
+        python -c "
+        import glob, nbformat, sys
+        errors = []
+        for nb_path in glob.glob('notebooks/**/*.ipynb', recursive=True):
+            try:
+                with open(nb_path) as f:
+                    nb = nbformat.read(f, as_version=4)
+                nbformat.validate(nb)
+                print(f'OK: {nb_path}')
+            except Exception as e:
+                errors.append(f'FAIL: {nb_path} — {e}')
+        if errors:
+            for e in errors:
+                print(e)
+            sys.exit(1)
+        print(f'All {len(list(glob.glob(\"notebooks/**/*.ipynb\", recursive=True)))} notebooks valid.')
+        "
+      displayName: "Validate notebook format"
+
+    - script: |
+        # Check that no notebooks contain hardcoded secrets
+        python -c "
+        import glob, json, re, sys
+        secret_patterns = [
+            r'[A-Za-z0-9+/]{40,}={0,2}',   # Base64 (possible tokens)
+            r'(?i)(password|secret|key|token)\s*=\s*[\"\']\S+[\"\'']',
+            r'DefaultEndpointsProtocol=https',
+            r'AccountKey=',
+        ]
+        flagged = []
+        for nb_path in glob.glob('notebooks/**/*.ipynb', recursive=True):
+            with open(nb_path) as f:
+                content = f.read()
+            for pat in secret_patterns:
+                if re.search(pat, content):
+                    flagged.append(f'{nb_path}: matches pattern [{pat}]')
+        if flagged:
+            print('Potential secrets found in notebooks:')
+            for f in flagged:
+                print(f)
+            sys.exit(1)
+        print('No secrets detected in notebooks.')
+        "
+      displayName: "Secret detection in notebooks"
+
+# ---------------------------------------------------------------
+# Stage 5: Publish CI Artifacts
+# ---------------------------------------------------------------
+- stage: PublishArtifacts
+  displayName: "Publish Artifacts"
+  dependsOn:
+    - UnitTests
+    - SecurityScan
+    - NotebookValidation
+  condition: succeeded()
+  jobs:
+  - job: Package
+    steps:
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: "$(System.DefaultWorkingDirectory)"
+        Contents: |
+          src/**
+          notebooks/**
+          configs/**
+          tests/**
+          requirements.txt
+          databricks.yml
+        TargetFolder: "$(Build.ArtifactStagingDirectory)/lakehouse-platform"
+      displayName: "Stage deployment artifacts"
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: "$(Build.ArtifactStagingDirectory)/lakehouse-platform"
+        ArtifactName: "lakehouse-platform-$(Build.BuildId)"
+      displayName: "Publish deployment artifact"

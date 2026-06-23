@@ -1,0 +1,136 @@
+# ============================================================
+# Data Quality Config: Silver Layer — Sales Orders
+# Agent: Data Quality & Observability Agent
+# ============================================================
+
+layer: silver
+domain: sales
+entity: orders
+table: "{env}_lakehouse.silver.sales_orders"
+run_on_schedule: "0 4 * * *"    # Daily at 04:00 UTC (after Silver job completes)
+stop_pipeline_on_failure: true   # Do NOT promote to Gold if Silver DQ fails
+alert_on_failure: true
+
+checks:
+
+  # --- Completeness ---
+  - check_name: order_id_not_null
+    check_type: completeness
+    column: order_id
+    rule: not_null
+    threshold: 0.0               # Zero tolerance
+
+  - check_name: customer_id_not_null
+    check_type: completeness
+    column: customer_id
+    rule: not_null
+    threshold: 0.0
+
+  - check_name: order_date_not_null
+    check_type: completeness
+    column: order_date
+    rule: not_null
+    threshold: 0.0
+
+  - check_name: amount_not_null
+    check_type: completeness
+    column: amount
+    rule: not_null
+    threshold: 0.0
+
+  - check_name: status_not_null
+    check_type: completeness
+    column: status
+    rule: not_null
+    threshold: 0.005             # 0.5% tolerance (late CDC events)
+
+  # --- Uniqueness ---
+  - check_name: order_id_unique
+    check_type: uniqueness
+    columns: [order_id]
+    rule: unique
+    threshold: 0.0               # Zero duplicate order IDs in Silver
+
+  # --- Validity: Range ---
+  - check_name: amount_non_negative
+    check_type: validity
+    column: amount
+    rule: range
+    min: 0
+    threshold: 0.001             # 0.1% tolerance for minor FX rounding edge cases
+
+  - check_name: quantity_positive
+    check_type: validity
+    column: quantity
+    rule: range
+    min: 1
+    max: 99999
+    threshold: 0.001
+
+  - check_name: discount_range
+    check_type: validity
+    column: discount
+    rule: range
+    min: 0.0
+    max: 1.0
+    threshold: 0.0
+
+  # --- Validity: Enum ---
+  - check_name: status_valid_values
+    check_type: validity
+    column: status
+    rule: enum
+    accepted_values:
+      - PENDING
+      - CONFIRMED
+      - SHIPPED
+      - DELIVERED
+      - CANCELLED
+      - RETURNED
+    threshold: 0.001
+
+  - check_name: currency_valid_iso
+    check_type: validity
+    column: currency
+    rule: enum
+    accepted_values:
+      - USD
+      - EUR
+      - GBP
+      - JPY
+      - CHF
+      - CAD
+      - AUD
+    threshold: 0.002
+
+  # --- Timeliness ---
+  - check_name: order_date_not_future
+    check_type: validity
+    column: order_date
+    rule: range
+    max_expr: "current_date()"   # No future-dated orders
+    threshold: 0.0
+
+  - check_name: data_freshness
+    check_type: timeliness
+    column: _silver_load_ts
+    rule: freshness
+    max_age_hours: 26            # Silver should be refreshed within 26 hours
+    threshold: 0.0
+
+  # --- Volume ---
+  - check_name: row_count_floor
+    check_type: volume
+    rule: row_count
+    min_rows: 100                # Alert if Silver has fewer than 100 rows
+    max_drift_pct: 0.5           # Alert if row count drops > 50% vs previous day
+
+notifications:
+  teams_webhook_secret_key: teams-dq-webhook-url
+  email: data-engineering@company.com
+  devops_work_item:
+    enabled: true
+    organization_url: "https://dev.azure.com/myorg"
+    project: DataPlatform
+    pat_secret_key: ado-pat-dq-bot
+    area_path: "DataPlatform\\DataQuality"

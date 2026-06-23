@@ -1,0 +1,75 @@
+# ============================================================
+# Source Configuration: Azure SQL Database
+# Agent: Data Ingestion Agent
+# ============================================================
+
+source_id: azure_sql_sales
+source_type: azure_sql_database
+domain: sales
+enabled: true
+
+connection:
+  # Secret fetched from Azure Key Vault via Databricks secret scope
+  secret_scope: kv-lakehouse-scope
+  secret_key_jdbc_url: azure-sql-sales-jdbc-url
+  # jdbc url format stored in Key Vault:
+  # jdbc:sqlserver://<server>.database.windows.net:1433;database=<db>;encrypt=true;trustServerCertificate=false;loginTimeout=30
+
+authentication:
+  type: service_principal
+  client_id_secret_key: sp-databricks-client-id
+  client_secret_key: sp-databricks-client-secret
+  tenant_id_secret_key: azure-tenant-id
+
+ingestion:
+  mode: batch                     # batch | cdc | full_refresh
+  strategy: incremental           # incremental | full_refresh
+  watermark_column: updated_at    # column used for incremental extraction
+  watermark_initial: "1900-01-01 00:00:00"
+
+  tables:
+    - source_table: dbo.orders
+      target_entity: orders
+      primary_keys: [order_id]
+      partition_column: order_date   # used for parallelism in JDBC read
+      lower_bound: "2020-01-01"
+      upper_bound: "2026-12-31"
+      num_partitions: 8
+      fetch_size: 10000
+
+    - source_table: dbo.order_items
+      target_entity: order_items
+      primary_keys: [order_item_id]
+      partition_column: created_at
+      lower_bound: "2020-01-01"
+      upper_bound: "2026-12-31"
+      num_partitions: 8
+      fetch_size: 10000
+
+    - source_table: dbo.customers
+      target_entity: customers
+      primary_keys: [customer_id]
+      partition_column: customer_id
+      lower_bound: 1
+      upper_bound: 999999999
+      num_partitions: 4
+      fetch_size: 5000
+
+schedule:
+  trigger_type: scheduled          # scheduled | event | manual
+  cron: "0 2 * * *"               # Daily at 02:00 UTC
+  timeout_minutes: 120
+  max_retries: 3
+  retry_delay_seconds: 60
+
+target:
+  adls_landing_path: "abfss://landing@{storage_account}.dfs.core.windows.net/domain=sales/source=azure_sql/"
+  bronze_catalog: "{env}_lakehouse"
+  bronze_schema: bronze
+  write_mode: append               # always append to bronze; dedup in silver
+  enable_schema_evolution: true
+
+metadata:
+  log_table: "{env}_lakehouse.bronze.ingestion_metadata"
+  enable_row_count_validation: true
+  enable_checksum: false

@@ -1,0 +1,72 @@
+# ============================================================
+# Source Configuration: Azure Event Hubs (Streaming)
+# Agent: Data Ingestion Agent
+# ============================================================
+
+source_id: eventhub_sales_events
+source_type: azure_event_hubs
+domain: sales
+enabled: true
+
+connection:
+  secret_scope: kv-lakehouse-scope
+  connection_string_secret_key: eventhub-sales-connection-string
+  # stored format: Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...
+  namespace: lakehouse-eh-namespace
+  event_hub_name: sales-events
+  consumer_group: databricks-ingestion-cg
+
+streaming:
+  starting_offset: "latest"        # latest | earliest | @{timestamp}
+  max_events_per_trigger: 50000
+  trigger_interval: "30 seconds"   # micro-batch interval
+  checkpoint_location: "abfss://raw@{storage_account}.dfs.core.windows.net/_checkpoints/sales_events/"
+
+schema:
+  # Schema of events emitted by source; used for deserialization
+  payload_format: json
+  fields:
+    - name: event_id
+      type: string
+      nullable: false
+    - name: order_id
+      type: long
+      nullable: false
+    - name: event_type
+      type: string             # ORDER_CREATED, ORDER_UPDATED, ORDER_CANCELLED
+      nullable: false
+    - name: customer_id
+      type: long
+      nullable: true
+    - name: amount
+      type: double
+      nullable: true
+    - name: currency
+      type: string
+      nullable: true
+    - name: event_timestamp
+      type: timestamp
+      nullable: false
+    - name: partition_key
+      type: string
+      nullable: true
+
+target:
+  bronze_catalog: "{env}_lakehouse"
+  bronze_schema: bronze
+  bronze_table: sales_events_stream
+  adls_path: "abfss://raw@{storage_account}.dfs.core.windows.net/domain=sales/entity=sales_events_stream/"
+  write_mode: append
+  enable_schema_evolution: true
+
+watermark:
+  event_time_column: event_timestamp
+  late_arrival_threshold: "10 minutes"
+
+metadata:
+  log_table: "{env}_lakehouse.bronze.ingestion_metadata"
+
+schedule:
+  trigger_type: continuous          # continuous streaming job
+  timeout_minutes: 0                # no timeout for streaming
+  max_retries: -1                   # always restart

@@ -1,0 +1,55 @@
+# ============================================================
+# Data Quality Config: Bronze Layer
+# Agent: Data Quality & Observability Agent
+# ============================================================
+
+layer: bronze
+domain: sales
+entity: orders
+table: "{env}_lakehouse.bronze.sales_orders"
+run_on_schedule: "0 3 * * *"    # After ingestion, before Silver job
+stop_pipeline_on_failure: false  # Bronze failures are warnings; do not block Silver
+alert_on_failure: true
+
+checks:
+
+  # --- Volume: ensure ingestion delivered data ---
+  - check_name: bronze_row_count_floor
+    check_type: volume
+    rule: row_count
+    min_rows: 1                  # At minimum, something must arrive each run
+    max_drift_pct: 0.8           # 80% volume drop → alert (possible source outage)
+
+  # --- Completeness on key columns (raw strings; cast happens in Silver) ---
+  - check_name: order_id_not_null_bronze
+    check_type: completeness
+    column: order_id
+    rule: not_null
+    threshold: 0.0
+
+  - check_name: ingestion_run_id_not_null
+    check_type: completeness
+    column: _ingestion_run_id
+    rule: not_null
+    threshold: 0.0
+
+  # --- Freshness: Bronze should always have data within last 25 hours ---
+  - check_name: bronze_freshness
+    check_type: timeliness
+    column: _ingestion_timestamp
+    rule: freshness
+    max_age_hours: 25
+    threshold: 0.0
+
+  # --- Schema drift: check that _rescued_data column is mostly empty ---
+  - check_name: schema_rescue_rate
+    check_type: validity
+    column: _rescued_data
+    rule: null_rate_below
+    max_non_null_rate: 0.01      # Allow ≤1% rescued (schema drift) rows; alert above
+
+notifications:
+  teams_webhook_secret_key: teams-dq-webhook-url
+  email: data-engineering@company.com
+  devops_work_item:
+    enabled: false               # Bronze issues → Teams alert only; no ADO ticket

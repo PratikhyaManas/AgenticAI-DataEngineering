@@ -1,0 +1,77 @@
+# ============================================================
+# Source Configuration: File-based ingestion (CSV/JSON on ADLS)
+# Agent: Data Ingestion Agent
+# ============================================================
+
+source_id: file_finance_invoices
+source_type: adls_files
+domain: finance
+enabled: true
+
+connection:
+  storage_account: "{storage_account}"
+  container: landing
+  secret_scope: kv-lakehouse-scope
+  storage_account_key_secret: adls-storage-account-key
+
+autoloader:
+  format: csv                       # csv | json | parquet | avro | delta
+  source_path: "abfss://landing@{storage_account}.dfs.core.windows.net/domain=finance/source=erp/"
+  schema_location: "abfss://raw@{storage_account}.dfs.core.windows.net/_schemas/finance/invoices/"
+  checkpoint_location: "abfss://raw@{storage_account}.dfs.core.windows.net/_checkpoints/finance/invoices/"
+  schema_evolution_mode: addNewColumns   # addNewColumns | rescue | failOnNewColumns
+  rescue_data_column: _rescued_data      # capture unparseable rows
+
+  csv_options:
+    header: true
+    delimiter: ","
+    quote: '"'
+    escape: "\\"
+    multiLine: false
+    inferSchema: false              # always use explicit schema for production
+
+  schema:
+    fields:
+      - name: invoice_id
+        type: string
+        nullable: false
+      - name: customer_id
+        type: string
+        nullable: false
+      - name: invoice_date
+        type: string               # raw strings; cast to date in Silver
+        nullable: false
+      - name: due_date
+        type: string
+        nullable: true
+      - name: amount
+        type: string               # raw strings; cast to decimal in Silver
+        nullable: false
+      - name: currency_code
+        type: string
+        nullable: false
+      - name: status
+        type: string
+        nullable: false
+      - name: description
+        type: string
+        nullable: true
+
+target:
+  bronze_catalog: "{env}_lakehouse"
+  bronze_schema: bronze
+  bronze_table: finance_invoices
+  adls_path: "abfss://raw@{storage_account}.dfs.core.windows.net/domain=finance/entity=invoices/"
+  write_mode: append
+  partition_by: [ingestion_date]
+
+schedule:
+  trigger_type: file_arrival        # triggered on new files landing in source_path
+  trigger_check_interval: "5 minutes"
+  timeout_minutes: 60
+  max_retries: 3
+  retry_delay_seconds: 30
+
+metadata:
+  log_table: "{env}_lakehouse.bronze.ingestion_metadata"
+  enable_row_count_validation: true

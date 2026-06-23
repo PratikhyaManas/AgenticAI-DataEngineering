@@ -1,0 +1,259 @@
+# ==============================================================
+# Databricks Asset Bundle Definition
+# Agent: CI/CD & DevOps Agent
+#
+# Defines Databricks Workflows (DAGs) deployed via DAB.
+# Targets: dev, test, prod (each maps to a separate workspace)
+# Reference: https://docs.databricks.com/en/dev-tools/bundles/
+# ==============================================================
+
+bundle:
+  name: lakehouse-data-platform
+
+workspace:
+  auth_type: pat              # Overridden per target via env-specific secrets
+  root_path: /Shared/lakehouse-platform
+
+variables:
+  env:
+    description: "Deployment environment"
+    default: dev
+  cluster_policy_id:
+    description: "Cluster policy to use for job clusters"
+  storage_account:
+    description: "ADLS Gen2 storage account name"
+
+# ---------------------------------------------------------------------------
+# Shared job cluster definitions
+# ---------------------------------------------------------------------------
+resources:
+  clusters:
+    standard_job_cluster:
+      cluster_name: "lakehouse-job-cluster-${var.env}"
+      spark_version: "14.3.x-scala2.12"
+      node_type_id: "Standard_DS3_v2"
+      autoscale:
+        min_workers: 2
+        max_workers: 8
+      spark_conf:
+        "spark.databricks.delta.preview.enabled": "true"
+        "spark.lakehouse.storage_account": "${var.storage_account}"
+        "spark.databricks.io.cache.enabled": "true"
+      azure_attributes:
+        availability: SPOT_WITH_FALLBACK_AZURE
+        first_on_demand: 1
+      policy_id: "${var.cluster_policy_id}"
+
+  # ---------------------------------------------------------------------------
+  # Databricks Workflow: Daily Batch Pipeline
+  # ---------------------------------------------------------------------------
+  jobs:
+    daily_batch_pipeline:
+      name: "lakehouse-daily-batch-${var.env}"
+      description: "Full daily batch pipeline: ingest → bronze DQ → silver clean → gold transform → gold DQ"
+      max_concurrent_runs: 1
+      timeout_seconds: 14400       # 4-hour timeout
+      schedule:
+        quartz_cron_expression: "0 0 1 * * ?"   # 01:00 UTC daily
+        timezone_id: UTC
+
+      email_notifications:
+        on_failure:
+          - data-engineering@company.com
+        on_success: []
+
+      tasks:
+        # Task 1: Ingest from Azure SQL
+        - task_key: ingest_azure_sql_sales
+          description: "Ingest Azure SQL sales tables to Bronze"
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/ingestion/batch/sql_ingestion.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--source_id"
+              - "azure_sql_sales"
+          libraries:
+            - pypi:
+                package: pyyaml
+          timeout_seconds: 3600
+          max_retries: 2
+          min_retry_interval_millis: 60000
+
+        # Task 2: Bronze DQ Check
+        - task_key: bronze_dq_sales
+          description: "Data quality checks on Bronze sales layer"
+          depends_on:
+            - task_key: ingest_azure_sql_sales
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/quality/dq_checks.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--config"
+              - "configs/quality/bronze_dq_config.yaml"
+          timeout_seconds: 1800
+          max_retries: 1
+
+        # Task 3: Bronze → Silver cleaning
+        - task_key: silver_clean_sales
+          description: "Bronze to Silver cleaning and standardization"
+          depends_on:
+            - task_key: bronze_dq_sales
+              outcome: SUCCESS           # Skip Silver if Bronze DQ failed
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/cleaning/bronze_to_silver.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+          timeout_seconds: 3600
+          max_retries: 2
+
+        # Task 4: Silver DQ Check
+        - task_key: silver_dq_sales
+          description: "Data quality checks on Silver layer"
+          depends_on:
+            - task_key: silver_clean_sales
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/quality/dq_checks.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--config"
+              - "configs/quality/silver_dq_config.yaml"
+          timeout_seconds: 1800
+
+        # Task 5: Silver → Gold transformation (fan-out)
+        - task_key: gold_dim_customer
+          description: "Build dim_customer Gold table"
+          depends_on:
+            - task_key: silver_dq_sales
+              outcome: SUCCESS
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/transformation/silver_to_gold.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--table"
+              - "dim_customer"
+          timeout_seconds: 3600
+
+        - task_key: gold_dim_product
+          description: "Build dim_product Gold table"
+          depends_on:
+            - task_key: silver_dq_sales
+              outcome: SUCCESS
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/transformation/silver_to_gold.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--table"
+              - "dim_product"
+          timeout_seconds: 1800
+
+        - task_key: gold_fact_sales
+          description: "Build fact_sales Gold table"
+          depends_on:
+            - task_key: gold_dim_customer
+            - task_key: gold_dim_product
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/transformation/silver_to_gold.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--table"
+              - "fact_sales"
+          timeout_seconds: 3600
+
+        # Task 6: Gold DQ
+        - task_key: gold_dq_sales
+          description: "Data quality checks on Gold layer"
+          depends_on:
+            - task_key: gold_fact_sales
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/quality/dq_checks.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--config"
+              - "configs/quality/gold_dq_config.yaml"
+          timeout_seconds: 1800
+
+    # ---------------------------------------------------------------------------
+    # Databricks Workflow: Streaming Pipeline (always-on)
+    # ---------------------------------------------------------------------------
+    streaming_eventhub_pipeline:
+      name: "lakehouse-streaming-eventhub-${var.env}"
+      description: "Continuous streaming ingestion from Azure Event Hubs"
+      max_concurrent_runs: 1
+
+      email_notifications:
+        on_failure:
+          - data-engineering@company.com
+
+      tasks:
+        - task_key: stream_sales_events
+          new_cluster:
+            $ref: "#/resources/clusters/standard_job_cluster"
+          spark_python_task:
+            python_file: "src/ingestion/streaming/eventhub_streaming.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--source_id"
+              - "eventhub_sales_events"
+          libraries:
+            - maven:
+                coordinates: com.microsoft.azure:azure-eventhubs-spark_2.12:2.3.22
+          timeout_seconds: 0         # No timeout for continuous streaming job
+          max_retries: -1            # Always restart on failure
+
+# ---------------------------------------------------------------------------
+# Per-environment target overrides
+# ---------------------------------------------------------------------------
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: "${DEV_DATABRICKS_HOST}"
+    variables:
+      env: dev
+      storage_account: "${DEV_STORAGE_ACCOUNT}"
+      cluster_policy_id: "${DEV_CLUSTER_POLICY_ID}"
+
+  test:
+    workspace:
+      host: "${TEST_DATABRICKS_HOST}"
+    variables:
+      env: test
+      storage_account: "${TEST_STORAGE_ACCOUNT}"
+      cluster_policy_id: "${TEST_CLUSTER_POLICY_ID}"
+
+  prod:
+    mode: production
+    workspace:
+      host: "${PROD_DATABRICKS_HOST}"
+    variables:
+      env: prod
+      storage_account: "${PROD_STORAGE_ACCOUNT}"
+      cluster_policy_id: "${PROD_CLUSTER_POLICY_ID}"
+    run_as:
+      service_principal_name: "sp-lakehouse-prod-pipeline"
