@@ -1,0 +1,87 @@
+# ==============================================================================
+# SAP S/4HANA OData v4 Source Configuration — Example
+# Agent: Data Ingestion Agent
+#
+# Used by: src/ingestion/odata/odata_ingestion.py
+#
+# Copy and rename to: configs/sources/{source_id}.yaml
+# ==============================================================================
+
+source_id: sap_business_partners
+domain:    erp
+source_type: odata
+
+# ------------------------------------------------------------------
+# OData endpoint
+# ------------------------------------------------------------------
+base_url: "https://my-sap-system.s4hana.cloud.sap"
+entity_set: "/sap/opu/odata4/sap/api_business_partner/srvd/sap/srvd_a2x_api_businesspartner_2/0001/BusinessPartner"
+
+# ------------------------------------------------------------------
+# Authentication
+# Supported: basic | oauth2 | none
+# Credentials are stored in Databricks Secret Scope, NOT here.
+# ------------------------------------------------------------------
+auth:
+  type: oauth2
+  secret_scope: sap-credentials           # Databricks secret scope name
+  token_url: "https://my-tenant.authentication.eu10.hana.ondemand.com/oauth/token"
+  client_id_secret:     "sap-client-id"   # Key in secret scope
+  client_secret_secret: "sap-client-secret"
+  scopes: ""                              # SAP BTP OAuth2 scopes (leave empty for client_credentials)
+
+# ------------------------------------------------------------------
+# Column selection — reduces payload size (OData $select)
+# Leave empty to fetch all columns.
+# ------------------------------------------------------------------
+select_columns:
+  - BusinessPartner
+  - BusinessPartnerFullName
+  - BusinessPartnerType
+  - BusinessPartnerCategory
+  - SearchTerm1
+  - CreationDate
+  - LastChangeDate
+  - BusinessPartnerIsBlocked
+
+# ------------------------------------------------------------------
+# OData key for records array in response body
+# OData v4 standard: "value"
+# OData v2 SAP:      "d.results"
+# ------------------------------------------------------------------
+data_key: "value"
+
+# ------------------------------------------------------------------
+# Incremental watermark
+# SAP exposes LastChangeDate or SystemLastChangedDateTime for most entities.
+# ------------------------------------------------------------------
+watermark:
+  enabled: true
+  column: "LastChangeDate"
+  format: "edm_datetime"        # edm_datetime → datetime'YYYY-MM-DDTHH:MM:SS'
+                                 # iso8601      → YYYY-MM-DDTHH:MM:SS.sssZ
+
+# ------------------------------------------------------------------
+# Pagination
+# OData v4 uses @odata.nextLink automatically. Set page_size to match
+# SAP system's MaxPageSize (check API metadata $metadata endpoint).
+# ------------------------------------------------------------------
+pagination:
+  page_size: 500
+
+# ------------------------------------------------------------------
+# HTTP settings
+# ------------------------------------------------------------------
+http:
+  timeout_seconds: 60
+  max_retries: 5
+  backoff_factor: 0.5
+  retry_on_status: [429, 500, 502, 503, 504]
+
+# ------------------------------------------------------------------
+# Target Bronze Delta table
+# ------------------------------------------------------------------
+target:
+  catalog: "{env}_lakehouse"     # {env} substituted at runtime
+  schema: "bronze"
+  table: "sap_business_partners_raw"

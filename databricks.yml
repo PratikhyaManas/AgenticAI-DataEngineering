@@ -408,6 +408,91 @@ resources:
               - "setup"
           timeout_seconds: 1800
 
+    # ---------------------------------------------------------------------------
+    # Databricks Workflow: SAP / OData ERP Ingestion
+    # Daily — runs after batch pipeline to enrich with SAP master data
+    # ---------------------------------------------------------------------------
+    sap_odata_ingestion:
+      name: "lakehouse-sap-odata-${var.env}"
+      description: "Incremental SAP S/4HANA OData ingestion (Business Partners, Materials)"
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 30 2 * * ?"   # 02:30 UTC daily (before batch at 01:00)
+        timezone_id: UTC
+
+      email_notifications:
+        on_failure:
+          - pratikhyamanas@gmail.com
+
+      environments:
+        - environment_key: odata_env
+          spec:
+            dependencies:
+              - pyyaml==6.0.1
+              - requests==2.32.3
+              - requests-oauthlib==1.3.1
+
+      tasks:
+        - task_key: ingest_sap_business_partners
+          description: "Ingest SAP Business Partners via OData v4"
+          environment_key: odata_env
+          spark_python_task:
+            python_file: "src/ingestion/odata/odata_ingestion.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--source_id"
+              - "sap_business_partners"
+          timeout_seconds: 3600
+          max_retries: 2
+
+    # ---------------------------------------------------------------------------
+    # Databricks Workflow: Security & Governance Setup (run once per environment)
+    # Applies column masks and row filters via Unity Catalog
+    # ---------------------------------------------------------------------------
+    security_governance_setup:
+      name: "lakehouse-security-governance-${var.env}"
+      description: "Apply PII column masks and RLS row filters via Unity Catalog"
+      max_concurrent_runs: 1
+
+      email_notifications:
+        on_failure:
+          - pratikhyamanas@gmail.com
+
+      environments:
+        - environment_key: security_env
+          spec:
+            dependencies:
+              - cryptography>=42.0.0
+              - pyyaml==6.0.1
+
+      tasks:
+        - task_key: apply_column_masks
+          description: "Apply Unity Catalog column masks on PII fields"
+          environment_key: security_env
+          spark_python_task:
+            python_file: "src/governance/column_encryption.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--action"
+              - "mask"
+          timeout_seconds: 900
+
+        - task_key: apply_row_filters
+          description: "Apply Unity Catalog row filters (region + BU access control)"
+          depends_on:
+            - task_key: apply_column_masks
+          environment_key: security_env
+          spark_python_task:
+            python_file: "src/governance/row_level_security.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--action"
+              - "setup"
+          timeout_seconds: 900
+
 # ---------------------------------------------------------------------------
 # Per-environment target overrides
 # ---------------------------------------------------------------------------
