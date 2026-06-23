@@ -153,10 +153,14 @@ def ingest_files_autoloader(
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Autoloader file ingestion job")
-    parser.add_argument("--env",       required=True, help="Environment: dev | test | prod")
-    parser.add_argument("--source_id", required=True, help="Source ID from YAML config")
+    parser.add_argument("--env",             required=True, help="Environment: dev | test | prod")
+    parser.add_argument("--source_id",       required=True, help="Source ID from YAML config")
+    parser.add_argument("--storage-account", required=True,
+                        dest="storage_account",
+                        help="ADLS Gen2 storage account name")
     args = parser.parse_args()
 
     spark = build_spark_session()
+    spark.conf.set("spark.lakehouse.storage_account", args.storage_account)
     config = load_source_config(args.source_id)
     ingest_files_autoloader(spark, config, args.env)

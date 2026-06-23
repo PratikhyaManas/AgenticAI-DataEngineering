@@ -27,13 +27,6 @@ variables:
   storage_account:
     description: "ADLS Gen2 storage account name"
 
-# Common spark_conf injected into every serverless task
-# (storage account is read by Python code via spark.conf.get)
-x-spark-conf: &common_spark_conf
-  "spark.databricks.delta.preview.enabled": "true"
-  "spark.databricks.io.cache.enabled": "true"
-  "spark.lakehouse.storage_account": "${var.storage_account}"
-
 resources:
   # ---------------------------------------------------------------------------
   # Databricks Workflow: Daily Batch Pipeline  (Serverless compute)
@@ -69,10 +62,6 @@ resources:
         - task_key: ingest_azure_sql_sales
           description: "Ingest Azure SQL sales tables to Bronze"
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/ingestion/batch/sql_ingestion.py"
             parameters:
@@ -80,6 +69,8 @@ resources:
               - "${var.env}"
               - "--source_id"
               - "azure_sql_sales"
+              - "--storage-account"
+              - "${var.storage_account}"
           timeout_seconds: 3600
           max_retries: 2
           min_retry_interval_millis: 60000
@@ -90,10 +81,6 @@ resources:
           depends_on:
             - task_key: ingest_azure_sql_sales
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/quality/dq_checks.py"
             parameters:
@@ -111,10 +98,6 @@ resources:
             - task_key: bronze_dq_sales
               outcome: SUCCESS           # Skip Silver if Bronze DQ failed
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/cleaning/bronze_to_silver.py"
             parameters:
@@ -129,10 +112,6 @@ resources:
           depends_on:
             - task_key: silver_clean_sales
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/quality/dq_checks.py"
             parameters:
@@ -149,10 +128,6 @@ resources:
             - task_key: silver_dq_sales
               outcome: SUCCESS
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/transformation/silver_to_gold.py"
             parameters:
@@ -168,10 +143,6 @@ resources:
             - task_key: silver_dq_sales
               outcome: SUCCESS
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/transformation/silver_to_gold.py"
             parameters:
@@ -187,10 +158,6 @@ resources:
             - task_key: gold_dim_customer
             - task_key: gold_dim_product
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/transformation/silver_to_gold.py"
             parameters:
@@ -206,10 +173,6 @@ resources:
           depends_on:
             - task_key: gold_fact_sales
           environment_key: lakehouse_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.databricks.io.cache.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/quality/dq_checks.py"
             parameters:
@@ -331,10 +294,6 @@ resources:
         - task_key: optimize_vacuum
           description: "OPTIMIZE + VACUUM all managed Delta tables"
           environment_key: maintenance_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
-            "spark.databricks.delta.vacuum.parallelDelete.enabled": "true"
           spark_python_task:
             python_file: "src/monitoring/lakehouse_monitor.py"
             parameters:
@@ -350,9 +309,6 @@ resources:
           depends_on:
             - task_key: optimize_vacuum
           environment_key: maintenance_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/monitoring/lakehouse_monitor.py"
             parameters:
@@ -392,9 +348,6 @@ resources:
         - task_key: compute_customer_features
           description: "Compute and register customer features to Feature Store"
           environment_key: ml_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/ml/feature_engineering.py"
             parameters:
@@ -407,9 +360,6 @@ resources:
         - task_key: compute_product_features
           description: "Compute and register product features to Feature Store"
           environment_key: ml_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/ml/feature_engineering.py"
             parameters:
@@ -425,9 +375,6 @@ resources:
             - task_key: compute_customer_features
             - task_key: compute_product_features
           environment_key: ml_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/ml/model_training.py"
             parameters:
@@ -456,9 +403,6 @@ resources:
       tasks:
         - task_key: setup_shares
           environment_key: governance_env
-          spark_conf:
-            "spark.databricks.delta.preview.enabled": "true"
-            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/governance/delta_sharing.py"
             parameters:
