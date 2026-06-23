@@ -1,0 +1,165 @@
+[build-system]
+requires = ["setuptools>=72", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "lakehouse-data-platform"
+version = "1.0.0"
+description = "Azure Lakehouse Data Platform — multi-agent agentic AI data engineering blueprint"
+requires-python = ">=3.11"
+dependencies = [
+    "pyspark==3.5.0",
+    "delta-spark==3.1.0",
+    "pyyaml==6.0.1",
+    "applicationinsights==0.11.10",
+    "azure-devops==7.1.0b4",
+    "msrest==0.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.2.0",
+    "pytest-cov==5.0.0",
+    "pytest-mock==3.14.0",
+    "ruff==0.4.4",
+    "black==24.4.2",
+    "isort==5.13.2",
+    "mypy==1.10.0",
+    "sqlfluff==3.0.7",
+    "bandit==1.7.9",
+    "pip-audit==2.7.3",
+    "nbformat==5.10.4",
+    "nbconvert==7.16.4",
+]
+
+# ==============================================================
+# Ruff — fast linter (replaces flake8 + pylint for most rules)
+# ==============================================================
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "S",   # flake8-bandit (security)
+    "SLF", # flake8-self (private member access)
+    "PTH", # flake8-use-pathlib
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "S101",  # assert statements allowed in tests
+    "S105",  # hardcoded password — false positives in tests
+    "S106",
+    "E501",  # line too long — handled by black
+    "SLF001",# private member access in PySpark internals
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S", "SLF"]   # relax security rules in test files
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+force-sort-within-sections = true
+
+# ==============================================================
+# Black — code formatter
+# ==============================================================
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.git
+  | \.venv
+  | __pycache__
+  | infra
+)/
+'''
+
+# ==============================================================
+# isort — import ordering (kept in sync with ruff isort rules)
+# ==============================================================
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["src"]
+skip_glob = ["infra/*", ".venv/*"]
+
+# ==============================================================
+# mypy — static type checking
+# ==============================================================
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+no_strict_optional = true
+warn_return_any = false
+warn_unused_configs = true
+exclude = ["infra/", "notebooks/"]
+
+[[tool.mypy.overrides]]
+module = ["pyspark.*", "delta.*", "dbutils.*"]
+ignore_missing_imports = true
+
+# ==============================================================
+# pytest — test runner
+# ==============================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-v",
+]
+markers = [
+    "unit: fast unit tests (no Databricks cluster)",
+    "integration: integration tests (requires live cluster)",
+    "slow: tests that take more than 30 seconds",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pyspark",
+    "ignore::UserWarning:pyspark",
+]
+
+# ==============================================================
+# Coverage — pytest-cov settings
+# ==============================================================
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+    "infra/*",
+]
+branch = true
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+
+# ==============================================================
+# Bandit — SAST (used standalone; config here for IDE integration)
+# ==============================================================
+[tool.bandit]
+targets = ["src"]
+skips = ["B101", "B105", "B106"]   # assert, hardcoded_password_string (test false positives)
+severity = "medium"
+confidence = "medium"

@@ -138,7 +138,8 @@ AgenticAI-DataEngineering/
 │   └── cd-pipeline.yaml                   ← DEV → Integration Tests → TEST (approval) → PROD (approval)
 │
 ├── databricks.yml                         ← Databricks Asset Bundle: workflows, clusters, targets
-├── requirements.txt                       ← Python dependencies (PySpark, testing, linting, security)
+├── pyproject.toml                         ← Tool configs: ruff, black, isort, mypy, pytest, coverage, bandit
+├── requirements.txt                       ← Pinned Python dependencies (PySpark, testing, linting, security)
 └── README.md                              ← This file
 ```
 
@@ -264,20 +265,29 @@ Sources → landing/ (raw files/DB extracts)
 ## Testing
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install all dev dependencies (uses pyproject.toml)
+pip install -e ".[dev]"
 
-# Run unit tests with coverage
-pytest tests/unit/ --cov=src --cov-report=term-missing -v
+# Run unit tests with coverage (settings from [tool.pytest] + [tool.coverage])
+pytest tests/unit/ --cov=src --cov-report=term-missing
 
-# Run linting
+# Run linting (settings from [tool.ruff])
 ruff check src/ tests/
+
+# Check formatting (settings from [tool.black])
 black --check src/ tests/
 
-# Security scan
-bandit -r src/ --severity-level medium
-pip-audit -r requirements.txt
+# Type checking (settings from [tool.mypy])
+mypy src/
+
+# SAST security scan (settings from [tool.bandit])
+bandit -r src/
+
+# Dependency CVE scan
+pip-audit
 ```
+
+All tool behaviour (line length, target Python version, ignored rules, coverage threshold, test markers) is centralised in `pyproject.toml` — no per-tool config files needed.
 
 ---
 
