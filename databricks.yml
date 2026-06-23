@@ -5,6 +5,12 @@
 # Defines Databricks Workflows (DAGs) deployed via DAB.
 # Targets: dev, test, prod (each maps to a separate workspace)
 # Reference: https://docs.databricks.com/en/dev-tools/bundles/
+#
+# Compute strategy:
+#   Batch jobs  → Serverless compute (environment_key) — pay-per-use, no idle cost
+#   Streaming   → Dedicated cluster  — Maven Event Hubs connector not supported
+#                                      on serverless; always-on workload suits
+#                                      dedicated pricing
 # ==============================================================
 
 bundle:
@@ -18,34 +24,19 @@ variables:
   env:
     description: "Deployment environment"
     default: dev
-  cluster_policy_id:
-    description: "Cluster policy to use for job clusters"
   storage_account:
     description: "ADLS Gen2 storage account name"
 
-# ---------------------------------------------------------------------------
-# Shared job cluster definitions
-# ---------------------------------------------------------------------------
-resources:
-  clusters:
-    standard_job_cluster:
-      cluster_name: "lakehouse-job-cluster-${var.env}"
-      spark_version: "14.3.x-scala2.12"
-      node_type_id: "Standard_DS3_v2"
-      autoscale:
-        min_workers: 2
-        max_workers: 8
-      spark_conf:
-        "spark.databricks.delta.preview.enabled": "true"
-        "spark.lakehouse.storage_account": "${var.storage_account}"
-        "spark.databricks.io.cache.enabled": "true"
-      azure_attributes:
-        availability: SPOT_WITH_FALLBACK_AZURE
-        first_on_demand: 1
-      policy_id: "${var.cluster_policy_id}"
+# Common spark_conf injected into every serverless task
+# (storage account is read by Python code via spark.conf.get)
+x-spark-conf: &common_spark_conf
+  "spark.databricks.delta.preview.enabled": "true"
+  "spark.databricks.io.cache.enabled": "true"
+  "spark.lakehouse.storage_account": "${var.storage_account}"
 
+resources:
   # ---------------------------------------------------------------------------
-  # Databricks Workflow: Daily Batch Pipeline
+  # Databricks Workflow: Daily Batch Pipeline  (Serverless compute)
   # ---------------------------------------------------------------------------
   jobs:
     daily_batch_pipeline:
@@ -62,12 +53,26 @@ resources:
           - data-engineering@company.com
         on_success: []
 
+      # Serverless environment — pip dependencies available to all tasks
+      environments:
+        - environment_key: lakehouse_env
+          spec:
+            client: "1"             # DBR serverless client version
+            dependencies:
+              - pyyaml==6.0.1
+              - applicationinsights==0.11.10
+              - azure-devops==7.1.0b4
+              - msrest==0.7.1
+
       tasks:
         # Task 1: Ingest from Azure SQL
         - task_key: ingest_azure_sql_sales
           description: "Ingest Azure SQL sales tables to Bronze"
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/ingestion/batch/sql_ingestion.py"
             parameters:
@@ -75,9 +80,6 @@ resources:
               - "${var.env}"
               - "--source_id"
               - "azure_sql_sales"
-          libraries:
-            - pypi:
-                package: pyyaml
           timeout_seconds: 3600
           max_retries: 2
           min_retry_interval_millis: 60000
@@ -87,8 +89,11 @@ resources:
           description: "Data quality checks on Bronze sales layer"
           depends_on:
             - task_key: ingest_azure_sql_sales
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/quality/dq_checks.py"
             parameters:
@@ -105,8 +110,11 @@ resources:
           depends_on:
             - task_key: bronze_dq_sales
               outcome: SUCCESS           # Skip Silver if Bronze DQ failed
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/cleaning/bronze_to_silver.py"
             parameters:
@@ -120,8 +128,11 @@ resources:
           description: "Data quality checks on Silver layer"
           depends_on:
             - task_key: silver_clean_sales
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/quality/dq_checks.py"
             parameters:
@@ -137,8 +148,11 @@ resources:
           depends_on:
             - task_key: silver_dq_sales
               outcome: SUCCESS
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/transformation/silver_to_gold.py"
             parameters:
@@ -153,8 +167,11 @@ resources:
           depends_on:
             - task_key: silver_dq_sales
               outcome: SUCCESS
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/transformation/silver_to_gold.py"
             parameters:
@@ -169,8 +186,11 @@ resources:
           depends_on:
             - task_key: gold_dim_customer
             - task_key: gold_dim_product
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/transformation/silver_to_gold.py"
             parameters:
@@ -185,8 +205,11 @@ resources:
           description: "Data quality checks on Gold layer"
           depends_on:
             - task_key: gold_fact_sales
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          environment_key: lakehouse_env
+          spark_conf:
+            "spark.databricks.delta.preview.enabled": "true"
+            "spark.databricks.io.cache.enabled": "true"
+            "spark.lakehouse.storage_account": "${var.storage_account}"
           spark_python_task:
             python_file: "src/quality/dq_checks.py"
             parameters:
@@ -197,7 +220,10 @@ resources:
           timeout_seconds: 1800
 
     # ---------------------------------------------------------------------------
-    # Databricks Workflow: Streaming Pipeline (always-on)
+    # Databricks Workflow: Streaming Pipeline
+    # Dedicated cluster — serverless does not support Maven JARs required
+    # by the Event Hubs Spark connector. A 2-node fixed cluster is used;
+    # ON_DEMAND_AZURE ensures no spot interruptions on a continuous workload.
     # ---------------------------------------------------------------------------
     streaming_eventhub_pipeline:
       name: "lakehouse-streaming-eventhub-${var.env}"
@@ -208,10 +234,22 @@ resources:
         on_failure:
           - data-engineering@company.com
 
+      job_clusters:
+        - job_cluster_key: streaming_cluster
+          new_cluster:
+            spark_version: "14.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 2           # Fixed size — autoscale not recommended for streaming
+            spark_conf:
+              "spark.databricks.delta.preview.enabled": "true"
+              "spark.lakehouse.storage_account": "${var.storage_account}"
+              "spark.databricks.io.cache.enabled": "true"
+            azure_attributes:
+              availability: ON_DEMAND_AZURE  # No spot — streaming cannot tolerate interruptions
+
       tasks:
         - task_key: stream_sales_events
-          new_cluster:
-            $ref: "#/resources/clusters/standard_job_cluster"
+          job_cluster_key: streaming_cluster
           spark_python_task:
             python_file: "src/ingestion/streaming/eventhub_streaming.py"
             parameters:
@@ -237,7 +275,6 @@ targets:
     variables:
       env: dev
       storage_account: "${DEV_STORAGE_ACCOUNT}"
-      cluster_policy_id: "${DEV_CLUSTER_POLICY_ID}"
 
   test:
     workspace:
@@ -245,7 +282,6 @@ targets:
     variables:
       env: test
       storage_account: "${TEST_STORAGE_ACCOUNT}"
-      cluster_policy_id: "${TEST_CLUSTER_POLICY_ID}"
 
   prod:
     mode: production
@@ -254,6 +290,5 @@ targets:
     variables:
       env: prod
       storage_account: "${PROD_STORAGE_ACCOUNT}"
-      cluster_policy_id: "${PROD_CLUSTER_POLICY_ID}"
     run_as:
       service_principal_name: "sp-lakehouse-prod-pipeline"
