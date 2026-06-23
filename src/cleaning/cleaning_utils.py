@@ -9,7 +9,10 @@ All functions are pure (no side effects) and tested independently.
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
-from pyspark.sql.types import DecimalType, TimestampType, DateType, IntegerType, LongType
+from pyspark.sql.types import (
+    DecimalType, TimestampType, DateType, IntegerType, LongType, StringType,
+)
+from pyspark.sql.window import Window
 from typing import Dict, List, Optional, Tuple
 
 
@@ -19,16 +22,24 @@ from typing import Dict, List, Optional, Tuple
 
 def cast_columns(df: DataFrame, cast_map: Dict[str, str]) -> DataFrame:
     """
-    Cast columns to target types.
+    Cast columns to target types using a single select() pass.
     cast_map: { column_name: spark_type_string }
     Example: {"amount": "decimal(18,2)", "order_date": "date"}
 
     Records that fail casting produce NULL (Spark default for safe cast).
     Downstream null checks will route these to quarantine.
     """
-    for col_name, target_type in cast_map.items():
-        df = df.withColumn(col_name, F.col(col_name).cast(target_type))
-    return df
+    cols = [
+        F.col(name).cast(target).alias(name) if name in cast_map else F.col(name)
+        for name, target in [(f.name, cast_map.get(f.name, f.name)) for f in df.schema.fields]
+    ]
+    return df.select(
+        *[
+            F.col(f.name).cast(cast_map[f.name]).alias(f.name)
+            if f.name in cast_map else F.col(f.name)
+            for f in df.schema.fields
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -36,39 +47,49 @@ def cast_columns(df: DataFrame, cast_map: Dict[str, str]) -> DataFrame:
 # ---------------------------------------------------------------------------
 
 def trim_string_columns(df: DataFrame, columns: Optional[List[str]] = None) -> DataFrame:
-    """Trim leading/trailing whitespace from string columns."""
-    from pyspark.sql.types import StringType
-    if columns is None:
-        columns = [f.name for f in df.schema.fields if isinstance(f.dataType, StringType)]
-    for col_name in columns:
-        df = df.withColumn(col_name, F.trim(F.col(col_name)))
-    return df
+    """Trim leading/trailing whitespace from string columns in one select() pass."""
+    trim_set = set(
+        columns if columns is not None
+        else [f.name for f in df.schema.fields if isinstance(f.dataType, StringType)]
+    )
+    return df.select(
+        *[
+            F.trim(F.col(f.name)).alias(f.name) if f.name in trim_set else F.col(f.name)
+            for f in df.schema.fields
+        ]
+    )
 
 
 def normalize_to_upper(df: DataFrame, columns: List[str]) -> DataFrame:
-    """Uppercase categorical string columns (e.g., status codes, currency)."""
-    for col_name in columns:
-        df = df.withColumn(col_name, F.upper(F.col(col_name)))
-    return df
+    """Uppercase categorical string columns in one select() pass."""
+    upper_set = set(columns)
+    return df.select(
+        *[
+            F.upper(F.col(f.name)).alias(f.name) if f.name in upper_set else F.col(f.name)
+            for f in df.schema.fields
+        ]
+    )
 
 
 def normalize_nulls(df: DataFrame, null_strings: Optional[List[str]] = None) -> DataFrame:
     """
-    Replace common null-equivalent string values with actual NULL.
+    Replace common null-equivalent string values with actual NULL in one select() pass.
     Handles: 'NULL', 'N/A', 'NA', 'none', '', 'undefined', 'unknown'
     """
     if null_strings is None:
         null_strings = ["NULL", "N/A", "NA", "none", "", "undefined", "unknown", "UNKNOWN", "#N/A"]
-    from pyspark.sql.types import StringType
-    string_cols = [f.name for f in df.schema.fields if isinstance(f.dataType, StringType)]
-    for col_name in string_cols:
-        df = df.withColumn(
-            col_name,
-            F.when(F.upper(F.trim(F.col(col_name))).isin(
-                [s.upper() for s in null_strings]
-            ), F.lit(None)).otherwise(F.col(col_name))
-        )
-    return df
+    upper_nulls = {s.upper() for s in null_strings}
+    string_cols = {f.name for f in df.schema.fields if isinstance(f.dataType, StringType)}
+    return df.select(
+        *[
+            F.when(
+                F.upper(F.trim(F.col(f.name))).isin(upper_nulls),
+                F.lit(None).cast("string"),
+            ).otherwise(F.col(f.name)).alias(f.name)
+            if f.name in string_cols else F.col(f.name)
+            for f in df.schema.fields
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +105,8 @@ def parse_timestamps(
     target_tz: str = STANDARD_TZ,
 ) -> DataFrame:
     """
-    Parse string timestamp columns into TimestampType and normalize to UTC.
+    Parse string timestamp columns into TimestampType and normalize to UTC
+    in a single select() pass — all columns transformed in one Spark stage.
     Tries multiple input formats in sequence; produces NULL if none match.
     """
     if input_formats is None:
@@ -96,16 +118,20 @@ def parse_timestamps(
             "dd-MM-yyyy HH:mm:ss",
         ]
 
-    for col_name in timestamp_cols:
+    ts_set = set(timestamp_cols)
+
+    def _parse_expr(name):
         parsed = F.lit(None).cast(TimestampType())
         for fmt in input_formats:
-            parsed = F.coalesce(parsed, F.to_timestamp(F.col(col_name), fmt))
-        # Normalize to UTC (convert_timezone requires Databricks Runtime 11+)
-        df = df.withColumn(
-            col_name,
-            F.to_utc_timestamp(parsed, target_tz)
-        )
-    return df
+            parsed = F.coalesce(parsed, F.to_timestamp(F.col(name), fmt))
+        return F.to_utc_timestamp(parsed, target_tz).alias(name)
+
+    return df.select(
+        *[
+            _parse_expr(f.name) if f.name in ts_set else F.col(f.name)
+            for f in df.schema.fields
+        ]
+    )
 
 
 def parse_dates(
@@ -113,7 +139,7 @@ def parse_dates(
     date_cols: List[str],
     input_formats: Optional[List[str]] = None,
 ) -> DataFrame:
-    """Parse string date columns into DateType."""
+    """Parse string date columns into DateType in a single select() pass."""
     if input_formats is None:
         input_formats = [
             "yyyy-MM-dd",
@@ -121,12 +147,21 @@ def parse_dates(
             "dd-MM-yyyy",
             "yyyyMMdd",
         ]
-    for col_name in date_cols:
+
+    date_set = set(date_cols)
+
+    def _date_expr(name):
         parsed = F.lit(None).cast(DateType())
         for fmt in input_formats:
-            parsed = F.coalesce(parsed, F.to_date(F.col(col_name), fmt))
-        df = df.withColumn(col_name, parsed)
-    return df
+            parsed = F.coalesce(parsed, F.to_date(F.col(name), fmt))
+        return parsed.alias(name)
+
+    return df.select(
+        *[
+            _date_expr(f.name) if f.name in date_set else F.col(f.name)
+            for f in df.schema.fields
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +178,8 @@ def deduplicate(
     Deduplicate DataFrame by primary keys, keeping the latest record
     per key (by order_by_col).  Deterministic: same input → same output.
     """
-    from pyspark.sql.window import Window
-
-    window = Window.partitionBy(*primary_keys).orderBy(
-        F.col(order_by_col).desc() if descending else F.col(order_by_col).asc()
-    )
+    order_col = F.col(order_by_col).desc() if descending else F.col(order_by_col).asc()
+    window = Window.partitionBy(*primary_keys).orderBy(order_col)
     return (
         df.withColumn("_row_number", F.row_number().over(window))
           .filter(F.col("_row_number") == 1)

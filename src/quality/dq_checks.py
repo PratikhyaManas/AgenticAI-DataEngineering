@@ -19,9 +19,10 @@ Dimensions covered:
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
-from typing import List, Optional, Callable, Any
+from typing import List, Optional, Any
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
+from pyspark.storagelevel import StorageLevel
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +66,31 @@ class DQEngine:
         self.run_id  = run_id or str(uuid.uuid4())
         self.results: List[DQCheckResult] = []
         self._results_table = f"{env}_lakehouse.bronze.dq_results"
+        self._cached_dfs: list = []      # track cached DataFrames for cleanup
+        self._total_cache: dict = {}     # {df_id: total_count} — avoids repeat count()
+
+    # ------------------------------------------------------------------
+    # DataFrame caching helpers
+    # ------------------------------------------------------------------
+    def cache_df(self, df: DataFrame) -> DataFrame:
+        """Persist a DataFrame to memory+disk and record it for later release."""
+        cached = df.persist(StorageLevel.MEMORY_AND_DISK)
+        self._cached_dfs.append(cached)
+        return cached
+
+    def release_caches(self) -> None:
+        """Unpersist all DataFrames cached during this DQ run."""
+        for df in self._cached_dfs:
+            df.unpersist()
+        self._cached_dfs.clear()
+        self._total_cache.clear()
+
+    def _total(self, df: DataFrame) -> int:
+        """Return row count, reusing a cached value where possible."""
+        key = id(df)
+        if key not in self._total_cache:
+            self._total_cache[key] = df.count()
+        return self._total_cache[key]
 
     def _make_result(self, check_name, check_type, column_name, status, expected, actual,
                      failures, total, threshold, table_name, error_message=None):
@@ -96,10 +122,10 @@ class DQEngine:
     # ------------------------------------------------------------------
     def check_not_null(self, df: DataFrame, column: str, table_name: str,
                         threshold: float = 0.0) -> DQCheckResult:
-        total    = df.count()
-        nulls    = df.filter(F.col(column).isNull()).count()
-        status   = "PASSED" if (nulls / total if total else 0) <= threshold else "FAILED"
-        result   = self._make_result(
+        total = self._total(df)
+        nulls = df.filter(F.col(column).isNull()).count()
+        status = "PASSED" if (nulls / total if total else 0) <= threshold else "FAILED"
+        result = self._make_result(
             f"not_null:{column}", "completeness", column, status,
             f"null_rate <= {threshold}", f"null_rate = {nulls/total:.4f}" if total else "N/A",
             nulls, total, threshold, table_name
@@ -107,16 +133,49 @@ class DQEngine:
         self.results.append(result)
         return result
 
-    def check_completeness_batch(self, df: DataFrame, columns: List[str],
-                                  table_name: str, threshold: float = 0.0) -> List[DQCheckResult]:
-        return [self.check_not_null(df, col, table_name, threshold) for col in columns]
+    def check_completeness_batch(
+        self,
+        df: DataFrame,
+        columns: List[str],
+        table_name: str,
+        threshold: float = 0.0,
+    ) -> List[DQCheckResult]:
+        """
+        Compute null counts for ALL columns in a single Spark aggregation pass
+        instead of one action per column.  Results are identical to calling
+        check_not_null() repeatedly, but uses only 2 Spark actions total
+        (1 count + 1 agg) regardless of how many columns are checked.
+        """
+        total = self._total(df)
+
+        # Build one agg() expression per column — single Spark job
+        agg_exprs = [
+            F.sum(F.col(c).isNull().cast("long")).alias(f"_null_{c}")
+            for c in columns
+        ]
+        null_counts = df.agg(*agg_exprs).collect()[0].asDict()
+
+        results = []
+        for col in columns:
+            nulls  = int(null_counts[f"_null_{col}"] or 0)
+            rate   = nulls / total if total else 0.0
+            status = "PASSED" if rate <= threshold else "FAILED"
+            result = self._make_result(
+                f"not_null:{col}", "completeness", col, status,
+                f"null_rate <= {threshold}",
+                f"null_rate = {rate:.4f}" if total else "N/A",
+                nulls, total, threshold, table_name,
+            )
+            self.results.append(result)
+            results.append(result)
+        return results
 
     # ------------------------------------------------------------------
     # 2. Uniqueness
     # ------------------------------------------------------------------
     def check_unique(self, df: DataFrame, columns: List[str], table_name: str,
                       threshold: float = 0.0) -> DQCheckResult:
-        total      = df.count()
+        total      = self._total(df)
         distinct   = df.select(*columns).distinct().count()
         duplicates = total - distinct
         status     = "PASSED" if (duplicates / total if total else 0) <= threshold else "FAILED"
@@ -133,7 +192,7 @@ class DQEngine:
     # ------------------------------------------------------------------
     def check_range(self, df: DataFrame, column: str, table_name: str,
                      min_val=None, max_val=None, threshold: float = 0.01) -> DQCheckResult:
-        total = df.count()
+        total = self._total(df)
         condition = F.lit(False)
         if min_val is not None:
             condition = condition | (F.col(column) < F.lit(min_val))
@@ -155,7 +214,7 @@ class DQEngine:
     # ------------------------------------------------------------------
     def check_enum(self, df: DataFrame, column: str, table_name: str,
                     accepted_values: List[Any], threshold: float = 0.01) -> DQCheckResult:
-        total      = df.count()
+        total      = self._total(df)
         violations = df.filter(~F.col(column).isin(accepted_values) & F.col(column).isNotNull()).count()
         rate       = violations / total if total else 0.0
         status     = "PASSED" if rate <= threshold else "FAILED"
@@ -257,3 +316,10 @@ class DQEngine:
             "warnings": sum(1 for r in self.results if r.status == "WARNING"),
             "total":    len(self.results),
         }
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        """Auto-release cached DataFrames when used as a context manager."""
+        self.release_caches()

@@ -13,6 +13,7 @@ No credentials are stored in code or config files.
 import argparse
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from pyspark.storagelevel import StorageLevel
 
 from src.ingestion.metadata.metadata_logger import (
     create_metadata_table_if_not_exists,
@@ -20,24 +21,11 @@ from src.ingestion.metadata.metadata_logger import (
     end_run,
     get_last_watermark,
 )
+from src.utils.config import load_source_config
 
 
 def build_spark_session() -> SparkSession:
     return SparkSession.builder.getOrCreate()
-
-
-def load_source_config(source_id: str) -> dict:
-    import yaml, os
-    config_dir = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "configs", "sources"
-    )
-    for fname in os.listdir(config_dir):
-        if fname.endswith(".yaml"):
-            with open(os.path.join(config_dir, fname)) as f:
-                cfg = yaml.safe_load(f)
-            if cfg.get("source_id") == source_id:
-                return cfg
-    raise ValueError(f"No config found for source_id={source_id}")
 
 
 def ingest_sql_table(
@@ -125,19 +113,27 @@ def ingest_sql_table(
             })
 
         raw_df = spark.read.format("jdbc").options(**jdbc_options).load()
-        rows_read = raw_df.count()
+
+        # Persist once — reused for count, max-watermark and the write below
+        raw_df = raw_df.persist(StorageLevel.MEMORY_AND_DISK)
+
+        # Compute row count and new watermark in a single aggregation action
+        if strategy == "incremental":
+            agg_row = raw_df.agg(
+                F.count("*").alias("rows"),
+                F.max(F.col(watermark_col).cast("string")).alias("max_wm"),
+            ).collect()[0]
+            rows_read     = int(agg_row["rows"])
+            new_watermark = agg_row["max_wm"]
+        else:
+            rows_read     = raw_df.count()
+            new_watermark = None
 
         if rows_read == 0:
             print(f"[INFO] No new rows for {entity} since {last_watermark}. Skipping write.")
             status = "SUCCESS"
             new_watermark = last_watermark
         else:
-            # Collect new watermark before writing
-            new_watermark = (
-                raw_df.agg(F.max(watermark_col).cast("string").alias("max_wm"))
-                      .collect()[0]["max_wm"]
-            ) if strategy == "incremental" else None
-
             enriched_df = (
                 raw_df
                 .withColumn("_ingestion_run_id",    F.lit(run_id))
@@ -158,6 +154,8 @@ def ingest_sql_table(
             rows_written = rows_read
             status = "SUCCESS"
             print(f"[INFO] Written {rows_written} rows to {catalog_table}. New watermark: {new_watermark}")
+
+        raw_df.unpersist()
 
     except Exception as exc:
         error_msg = str(exc)

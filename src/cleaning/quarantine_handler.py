@@ -85,7 +85,7 @@ def write_to_quarantine(
     )
 
     quarantine_enriched.write.format("delta").mode("append").saveAsTable(quarantine_table)
-    print(f"[QUARANTINE] Written {quarantine_df.count()} rejected records to {quarantine_table}")
+    print(f"[QUARANTINE] Rejected records written to {quarantine_table}")
 
 
 def get_quarantine_summary(spark: SparkSession, env: str, domain: str = None, entity: str = None) -> DataFrame:

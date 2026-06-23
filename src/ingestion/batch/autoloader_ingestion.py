@@ -13,43 +13,27 @@ Usage (from Databricks Workflow task or notebook):
 import argparse
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import StructType
+from pyspark.sql.types import StructType, StructField, StringType, LongType, DoubleType, TimestampType, BooleanType, IntegerType
 
 from src.ingestion.metadata.metadata_logger import (
     create_metadata_table_if_not_exists,
     start_run,
     end_run,
 )
+from src.utils.config import load_source_config
+
+_TYPE_MAP = {
+    "string":    StringType(),
+    "long":      LongType(),
+    "double":    DoubleType(),
+    "timestamp": TimestampType(),
+    "boolean":   BooleanType(),
+    "integer":   IntegerType(),
+}
 
 
 def build_spark_session() -> SparkSession:
     return SparkSession.builder.getOrCreate()
-
-
-def load_source_config(source_id: str) -> dict:
-    """
-    Load YAML source config.  In production this is mounted as a Databricks
-    job parameter or read from a Delta config table.
-    """
-    import yaml, os
-    config_dir = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "configs", "sources"
-    )
-    # Map source_id → config file (convention: {source_id}.yaml doesn't always match;
-    # scan all files and find matching source_id key)
-    for fname in os.listdir(config_dir):
-        if fname.endswith(".yaml"):
-            with open(os.path.join(config_dir, fname)) as f:
-                cfg = yaml.safe_load(f)
-            if cfg.get("source_id") == source_id:
-                return cfg
-    raise ValueError(f"No config found for source_id={source_id}")
-
-
-def get_secret(spark: SparkSession, scope: str, key: str) -> str:
-    """Fetch secret from Azure Key Vault-backed Databricks secret scope."""
-    return spark.conf.get(f"spark.databricks.secret.{scope}.{key}",
-                          dbutils.secrets.get(scope=scope, key=key))  # noqa: F821
 
 
 def ingest_files_autoloader(
@@ -105,17 +89,8 @@ def ingest_files_autoloader(
         # --- Build explicit schema if provided ---
         schema_fields = al_cfg.get("schema", {}).get("fields", [])
         if schema_fields:
-            from pyspark.sql.types import (
-                StructType, StructField, StringType, LongType,
-                DoubleType, TimestampType, BooleanType, IntegerType
-            )
-            _type_map = {
-                "string": StringType(), "long": LongType(), "double": DoubleType(),
-                "timestamp": TimestampType(), "boolean": BooleanType(),
-                "integer": IntegerType(),
-            }
             schema = StructType([
-                StructField(f["name"], _type_map.get(f["type"], StringType()), f.get("nullable", True))
+                StructField(f["name"], _TYPE_MAP.get(f["type"], StringType()), f.get("nullable", True))
                 for f in schema_fields
             ])
             reader_options["cloudFiles.schemaHints"] = ",".join(

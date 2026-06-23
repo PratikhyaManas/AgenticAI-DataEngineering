@@ -21,6 +21,7 @@ from src.ingestion.metadata.metadata_logger import (
     create_metadata_table_if_not_exists,
     start_run,
 )
+from src.utils.config import load_source_config
 
 
 # ---------------------------------------------------------------------------
@@ -40,20 +41,6 @@ SALES_EVENT_SCHEMA = StructType([
 
 def build_spark_session() -> SparkSession:
     return SparkSession.builder.getOrCreate()
-
-
-def load_source_config(source_id: str) -> dict:
-    import yaml, os
-    config_dir = os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "configs", "sources"
-    )
-    for fname in os.listdir(config_dir):
-        if fname.endswith(".yaml"):
-            with open(os.path.join(config_dir, fname)) as f:
-                cfg = yaml.safe_load(f)
-            if cfg.get("source_id") == source_id:
-                return cfg
-    raise ValueError(f"No config found for source_id={source_id}")
 
 
 def build_eventhub_conf(config: dict, spark: SparkSession) -> dict:

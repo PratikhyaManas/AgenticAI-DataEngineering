@@ -19,6 +19,7 @@ from src.cleaning.cleaning_utils import (
     cast_columns,
     trim_string_columns,
     normalize_nulls,
+    normalize_to_upper,
     parse_timestamps,
     parse_dates,
     deduplicate,
@@ -73,17 +74,16 @@ def run_cleaning_job(spark: SparkSession, env: str) -> None:
     bronze_df = spark.table(bronze_table).filter(
         F.col("_ingestion_timestamp") > F.lit(last_silver_ts)
     )
-    raw_count = bronze_df.count()
-    print(f"[INFO]  New Bronze rows to process: {raw_count}")
 
-    if raw_count == 0:
+    # isEmpty() uses LIMIT 1 — avoids a full count() scan on the Bronze table
+    if bronze_df.isEmpty():
         print("[INFO]  Nothing to process. Exiting.")
         return
 
     # 2. String normalization
     df = trim_string_columns(bronze_df)
     df = normalize_nulls(df)
-    df = normalize_to_upper_cols(df, UPPERCASE_COLS)
+    df = normalize_to_upper(df, UPPERCASE_COLS)
 
     # 3. Type casting (safe cast; failures → NULL → caught by null check)
     df = cast_columns(df, CAST_MAP)
@@ -99,11 +99,14 @@ def run_cleaning_job(spark: SparkSession, env: str) -> None:
     # 6. Deduplicate within this batch on primary keys
     df = deduplicate(df, PRIMARY_KEYS, order_by_col="updated_at")
 
-    # 7. Split valid / quarantine
-    valid_df, quarantine_df = split_valid_quarantine(df)
+    # 7. Split valid / quarantine — persist to avoid recomputing the split logic twice
+    from pyspark.storagelevel import StorageLevel
+    flagged_df = df.persist(StorageLevel.MEMORY_AND_DISK)
+    valid_df, quarantine_df = split_valid_quarantine(flagged_df)
 
-    quarantine_count = quarantine_df.count()
+    # Materialize both splits now (single pass over persisted data)
     valid_count      = valid_df.count()
+    quarantine_count = quarantine_df.count()
     print(f"[INFO]  Valid: {valid_count}, Quarantined: {quarantine_count}")
 
     # 8. Add Silver audit columns
@@ -129,15 +132,9 @@ def run_cleaning_job(spark: SparkSession, env: str) -> None:
             silver_run_id=silver_run_id,
         )
 
+    flagged_df.unpersist()
     print(f"[DONE]  Silver table updated: {silver_table}")
     print(f"[DONE]  Quarantine records written: {quarantine_count}")
-
-
-def normalize_to_upper_cols(df, columns):
-    for c in columns:
-        if c in df.columns:
-            df = df.withColumn(c, F.upper(F.col(c)))
-    return df
 
 
 # ---------------------------------------------------------------------------

@@ -55,15 +55,12 @@ def apply_scd2(
     """
     now = datetime.now(timezone.utc)
 
-    # Step 1: Find records that are new or changed
-    current_target = spark.table(target_table).filter(F.col(is_current_col) == True)
-
-    join_cond = " AND ".join([f"src.{k} = tgt.{k}" for k in natural_keys])
-    change_cond = " OR ".join([f"src.{c} <> tgt.{c}" for c in tracked_cols])
-
     source_df.createOrReplaceTempView("_scd2_source")
 
-    # Step 2: Expire changed records
+    # Step 1: Expire changed records
+    join_cond  = " AND ".join([f"src.{k} = tgt.{k}" for k in natural_keys])
+    change_cond = " OR ".join([f"src.{c} <> tgt.{c}" for c in tracked_cols])
+
     spark.sql(f"""
         MERGE INTO {target_table} AS tgt
         USING _scd2_source AS src
@@ -74,18 +71,18 @@ def apply_scd2(
                 tgt.{is_current_col}  = FALSE
     """)
 
-    # Step 3: Insert new versions for changed + new records
-    # Identify rows to insert: either no match in target or changed
+    # Step 2: Insert new versions for changed + brand-new records
     rows_to_insert = spark.sql(f"""
         SELECT src.*
         FROM _scd2_source src
         LEFT JOIN {target_table} tgt
           ON {join_cond} AND tgt.{is_current_col} = TRUE
-        WHERE tgt.{natural_keys[0]} IS NULL        -- brand new
-           OR ({change_cond})                       -- changed
+        WHERE tgt.{natural_keys[0]} IS NULL
+           OR ({change_cond})
     """)
 
-    if rows_to_insert.count() == 0:
+    # isEmpty() uses LIMIT 1 internally — far cheaper than count() == 0
+    if rows_to_insert.isEmpty():
         return
 
     rows_to_insert = (
@@ -272,13 +269,14 @@ def build_fact_sales(spark: SparkSession, env: str) -> None:
     items = spark.table(silver_items).alias("i")
 
     # Resolve customer surrogate key (current record in SCD2 dimension)
-    dim_cust = (
+    # broadcast() hint: dim tables are small vs fact — avoids shuffle join
+    dim_cust = F.broadcast(
         spark.table(dim_customer)
              .filter(F.col("_is_current") == True)
              .select("customer_id", "customer_sk")
              .alias("dc")
     )
-    dim_prod = (
+    dim_prod = F.broadcast(
         spark.table(dim_product)
              .select("product_id", "product_sk")
              .alias("dp")
