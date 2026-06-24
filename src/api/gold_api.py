@@ -128,13 +128,25 @@ app.add_middleware(
 
 _bearer = HTTPBearer(auto_error=True)
 
-@lru_cache(maxsize=1)
+# JWKS is cached with a 1-hour TTL so key rotations are picked up automatically.
+_JWKS_CACHE: dict[str, tuple[dict, float]] = {}   # tenant_id → (jwks, fetched_at)
+_JWKS_TTL_SECONDS = 3600
+
+
 def _get_jwks(tenant_id: str) -> dict:
-    """Fetch JWKS from Azure AD. Cached per process (refreshed on restart)."""
+    """
+    Fetch JWKS from Azure AD with a 1-hour TTL cache.
+    Refreshes automatically on key rotation — no restart required.
+    """
+    cached, fetched_at = _JWKS_CACHE.get(tenant_id, ({}, 0.0))
+    if cached and (time.monotonic() - fetched_at) < _JWKS_TTL_SECONDS:
+        return cached
     url = f"https://login.microsoftonline.com/{tenant_id}/discovery/v2.0/keys"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    jwks = resp.json()
+    _JWKS_CACHE[tenant_id] = (jwks, time.monotonic())
+    return jwks
 
 
 def _decode_token(token: str) -> dict:
@@ -291,8 +303,12 @@ class AdHocQueryRequest(BaseModel):
         """
         Block DDL and DML statements in ad-hoc queries.
         Only SELECT and WITH (CTEs) are permitted.
+        Comments are stripped first so they cannot be used to hide forbidden keywords.
         """
-        normalised = v.strip().upper()
+        # Strip block comments (/* ... */) and line comments (-- ...) before validation
+        stripped = re.sub(r"/\*.*?\*/", " ", v, flags=re.DOTALL)
+        stripped = re.sub(r"--[^\n]*", " ", stripped)
+        normalised = stripped.strip().upper()
         forbidden  = re.compile(
             r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|REPLACE|MERGE|GRANT|REVOKE)\b"
         )

@@ -153,7 +153,10 @@ def _build_schema_context(
         )
         cursor = conn.cursor()
 
-        # Validate schema names before interpolation (only allow word characters)
+        # Validate catalog and schema names before interpolation (only allow word characters)
+        if not _VALID_IDENTIFIER.match(catalog):
+            raise ValueError(f"Invalid catalog name: {catalog!r}")
+
         safe_schemas = [
             s for s in schemas if _VALID_IDENTIFIER.match(s)
         ]
