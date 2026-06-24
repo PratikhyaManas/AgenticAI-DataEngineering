@@ -15,6 +15,8 @@ import uuid
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
+from src.utils.logger import get_logger
+
 from src.cleaning.cleaning_utils import (
     cast_columns,
     trim_string_columns,
@@ -29,6 +31,10 @@ from src.cleaning.cleaning_utils import (
     add_silver_metadata,
 )
 from src.cleaning.quarantine_handler import write_to_quarantine
+from src.lineage.openlineage_emitter import (
+    LineageEmitter, LineageConfig, LineageDataset,
+    delta_table_dataset, spark_job_facet, dq_metrics_facet,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +69,15 @@ def run_cleaning_job(spark: SparkSession, env: str) -> None:
     source_system  = "azure_sql_sales"
 
     print(f"[START] Bronze→Silver cleaning | run_id={silver_run_id}")
+
+    _lineage = LineageEmitter(LineageConfig.from_env())
+    _ol_inputs  = [delta_table_dataset(env, "bronze", "sales_orders")]
+    _ol_outputs = [delta_table_dataset(env, "silver", "sales_orders"),
+                   delta_table_dataset(env, "bronze", "quarantine")]
+    _lineage.emit_start(
+        "clean.bronze_to_silver.sales_orders", silver_run_id,
+        _ol_inputs, _ol_outputs, run_facets=spark_job_facet(),
+    )
 
     # 1. Read Bronze — only process records not yet promoted to Silver
     #    Uses a high-watermark approach: last _ingestion_timestamp in Silver
@@ -107,7 +122,8 @@ def run_cleaning_job(spark: SparkSession, env: str) -> None:
     # Materialize both splits now (single pass over persisted data)
     valid_count      = valid_df.count()
     quarantine_count = quarantine_df.count()
-    print(f"[INFO]  Valid: {valid_count}, Quarantined: {quarantine_count}")
+    _log = get_logger(__name__)
+    _log.info("Split complete — valid=%d  quarantined=%d", valid_count, quarantine_count)
 
     # 8. Add Silver audit columns
     valid_df = add_silver_metadata(valid_df, source_system, silver_run_id)
@@ -135,6 +151,19 @@ def run_cleaning_job(spark: SparkSession, env: str) -> None:
     flagged_df.unpersist()
     print(f"[DONE]  Silver table updated: {silver_table}")
     print(f"[DONE]  Quarantine records written: {quarantine_count}")
+
+    # Emit OpenLineage COMPLETE with row-count stats
+    _ol_outputs[0].row_count = valid_count
+    _ol_outputs[1].row_count = quarantine_count
+    _lineage.emit_complete(
+        "clean.bronze_to_silver.sales_orders", silver_run_id,
+        _ol_inputs, _ol_outputs,
+        run_facets=dq_metrics_facet(
+            rows_total=valid_count + quarantine_count,
+            rows_passed=valid_count,
+            rows_failed=quarantine_count,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

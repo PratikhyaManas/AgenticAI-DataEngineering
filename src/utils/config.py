@@ -14,7 +14,14 @@ from functools import lru_cache
 from pathlib import Path
 
 
-_CONFIGS_ROOT = Path(__file__).parents[2] / "configs" / "sources"
+# Allow override via env var so the module works when installed as a package
+# or when running from a non-standard working directory (e.g. a Docker container).
+_ENV_OVERRIDE = os.environ.get("LAKEHOUSE_CONFIGS_ROOT")
+_CONFIGS_ROOT = (
+    Path(_ENV_OVERRIDE) / "sources"
+    if _ENV_OVERRIDE
+    else Path(__file__).parents[2] / "configs" / "sources"
+)
 
 
 @lru_cache(maxsize=64)

@@ -1,8 +1,8 @@
 # Azure Lakehouse Data Platform
 ## Multi-Agent Agentic AI — Data Engineering Blueprint
 
-> **Stack:** Azure Databricks (Unity Catalog) · ADLS Gen2 · Azure DevOps · Terraform  
-> **Compliance:** GDPR / SOC2  
+> **Stack:** Azure Databricks (Unity Catalog) · ADLS Gen2 · Azure OpenAI GPT-4o · FastAPI · MLflow · OpenLineage · Azure DevOps · Terraform
+> **Compliance:** GDPR Article 17 / SOC2
 > **Languages:** Python (PySpark) · SQL · YAML · HCL (Terraform)
 
 ---
@@ -13,16 +13,19 @@
 flowchart TD
     subgraph Sources
         S1[Azure SQL DB]
-        S2[On-Prem SQL via ADF IR]
+        S2[SAP OData]
         S3[REST APIs]
         S4[Files on ADLS]
-        S5[Azure Event Hubs]
+        S5[Azure Event Hubs / CDC]
     end
 
-    subgraph Ingestion
-        ADF[ADF — Self-Hosted IR]
+    subgraph Ingestion["Ingestion Layer"]
         ABL[Autoloader — Batch]
+        SQL[JDBC Watermark — SQL]
         STR[Structured Streaming]
+        CDC[Debezium CDC]
+        OD[OData Ingestion]
+        REST[REST Poller]
     end
 
     subgraph ADLS["ADLS Gen2 — Lakehouse Zones"]
@@ -34,33 +37,51 @@ flowchart TD
     end
 
     subgraph DBR["Azure Databricks — Unity Catalog"]
-        WF[Databricks Workflows]
-        CLN[Cleaning Jobs]
-        TRF[Gold Transformation]
-        DQ[DQ Engine]
+        DLT_B[DLT: Bronze→Silver]
+        DLT_G[DLT: Silver→Gold]
+        DQ[DQ Engine + Alerting]
+        MON[Lakehouse Monitor]
+        LIN[OpenLineage Emitter]
     end
 
-    subgraph Consumers
-        PBI[Power BI Direct Lake]
-        ML[Azure ML / MLflow]
+    subgraph Agents["Agentic AI Layer"]
+        DQA[DQ Remediation Agent\nGPT-4o]
+        GDPR[GDPR RTBF Agent]
+        NL[NL-to-SQL Agent\nGPT-4o]
+    end
+
+    subgraph ML["ML / MLOps"]
+        FE[Feature Engineering]
+        MT[Model Training\nGBT + MLflow]
+        BI[Batch Inference\nChampion/Challenger]
+        DM[Drift Monitor\nPSI · KS · JS]
+    end
+
+    subgraph API["Gold REST API"]
+        FA[FastAPI\nJWT · RBAC · Rate-limit]
     end
 
     subgraph Platform["Platform Services"]
         KV[Azure Key Vault]
-        MON[Azure Monitor & App Insights]
+        AOAI[Azure OpenAI]
+        APPINS[App Insights]
         ADO[Azure DevOps CI/CD]
         TF[Terraform IaC]
     end
 
-    S1 & S2 --> ADF --> LND
-    S3 & S4 --> ABL --> LND
-    S5 --> STR --> RAW
-    LND --> WF --> RAW --> CLN --> CUR --> TRF --> GLD
-    CLN --> QRN
+    Sources --> Ingestion --> LND --> RAW
+    RAW --> DLT_B --> CUR --> DLT_G --> GLD
+    DLT_B & DLT_G --> QRN
     DQ --> RAW & CUR & GLD
-    GLD --> PBI & ML
-    KV --> DBR
-    MON --> DBR
+    GLD --> FA --> NL
+    GLD --> ML
+    DM --> MT
+    DQA --> RAW & CUR
+    GDPR --> RAW & CUR & GLD
+    LIN --> RAW & CUR & GLD
+    KV --> DBR & Agents
+    AOAI --> DQA & NL
+    APPINS --> DQ & MON
     ADO --> DBR
     TF --> ADLS & DBR & KV
 ```
@@ -71,13 +92,18 @@ flowchart TD
 
 | Agent | Key Artifacts |
 |---|---|
-| **Architect & Orchestrator** | `docs/01_architecture_design.md` — full architecture, zone layout, tech decisions |
-| **Data Ingestion Agent** | `src/ingestion/` · `configs/sources/` — Autoloader, JDBC, Event Hubs streaming |
-| **Data Cleaning Agent** | `src/cleaning/` — Bronze→Silver, cleaning utils, quarantine handler |
-| **Transformation Agent** | `src/transformation/` — SCD2 dim_customer, SCD1 dim_product, fact_sales |
-| **DQ & Observability Agent** | `src/quality/` · `configs/quality/` — DQ engine, Azure Monitor alerting |
-| **Security & Governance Agent** | `src/governance/` — Unity Catalog RBAC, column masking, data classification |
-| **CI/CD & DevOps Agent** | `.azure-pipelines/` · `databricks.yml` · `infra/terraform/` |
+| **Data Ingestion Agent** | `src/ingestion/` · `configs/sources/` — Autoloader, JDBC, Event Hubs, CDC (Debezium), OData, REST |
+| **Data Cleaning Agent** | `src/cleaning/` · `src/dlt/bronze_to_silver_dlt.py` — Bronze→Silver, DLT pipeline, quarantine |
+| **Transformation Agent** | `src/transformation/` · `src/dlt/silver_to_gold_dlt.py` — SCD2 dims, fact_sales, DLT pipeline |
+| **DQ & Observability Agent** | `src/quality/` · `configs/quality/` — DQ engine, App Insights alerting, Lakehouse Monitor |
+| **DQ Remediation Agent** | `src/agents/dq_remediation_agent.py` — GPT-4o classifies failures → auto-impute/quarantine/reject |
+| **GDPR RTBF Agent** | `src/agents/gdpr_rtbf_agent.py` — Article 17 erasure across all Delta layers with audit log |
+| **NL-to-SQL Agent** | `src/agents/nl_to_sql_agent.py` — Natural language → validated SQL → Gold layer execution |
+| **MLOps Agent** | `src/ml/` — Feature engineering, GBT training, batch inference, champion/challenger, drift monitor |
+| **Data Lineage Agent** | `src/lineage/openlineage_emitter.py` — OpenLineage events to Marquez / Microsoft Purview |
+| **Gold REST API** | `src/api/gold_api.py` — FastAPI with Azure AD JWT, RBAC, rate limiting, NL-to-SQL router |
+| **Security & Governance Agent** | `src/governance/` — Unity Catalog RBAC, column masking, encryption, row-level security, Delta Sharing |
+| **CI/CD & DevOps Agent** | `.azure-pipelines/` · `databricks.yml` · `infra/terraform/` · `Makefile` |
 
 ---
 
@@ -85,428 +111,292 @@ flowchart TD
 
 ```
 AgenticAI-DataEngineering/
-├── docs/
-│   ├── 01_architecture_design.md          ← Architecture + Mermaid diagrams
-│   ├── 02_data_models_quality_security.md ← Schema specs, cleaning rules, RBAC
-│   ├── 03_implementation_blueprint.md     ← This README + code index
-│   └── 04_runbook_operational_guidelines.md ← Onboarding, debugging, incidents
+├── .azure-pipelines/
+│   ├── ci-pipeline.yaml            ← Lint → Unit Tests → Security Scan → bundle validate
+│   └── cd-pipeline.yaml            ← DEV (auto) → TEST (approval) → PROD (approval)
 │
-├── src/
-│   ├── ingestion/
-│   │   ├── batch/
-│   │   │   ├── autoloader_ingestion.py    ← ADLS file → Bronze Delta (Autoloader)
-│   │   │   └── sql_ingestion.py           ← Azure SQL → Bronze Delta (JDBC)
-│   │   ├── streaming/
-│   │   │   └── eventhub_streaming.py      ← Event Hubs → Bronze Delta (Structured Streaming)
-│   │   └── metadata/
-│   │       └── metadata_logger.py         ← Audit metadata Delta table
-│   ├── cleaning/
-│   │   ├── cleaning_utils.py              ← Reusable PySpark cleaning functions
-│   │   ├── bronze_to_silver.py            ← Bronze → Silver job (sales orders)
-│   │   └── quarantine_handler.py          ← Quarantine write + reprocessing
-│   ├── transformation/
-│   │   └── silver_to_gold.py              ← SCD2 dims + fact_sales Gold builder
-│   ├── quality/
-│   │   ├── dq_checks.py                   ← DQ engine (completeness/uniqueness/range/freshness)
-│   │   └── alerting.py                    ← App Insights + Azure Monitor + ADO work items
-│   └── governance/
-│       ├── unity_catalog_setup.py         ← Catalog/schema/grant provisioning
-│       └── data_masking.py                ← PII pseudonymization, masking, classification
+├── .azuredevops/
+│   └── pull_request_template.md    ← PR checklist enforced on every PR
+│
+├── .vscode/
+│   ├── settings.json               ← Python interpreter, ruff, formatter, test discovery
+│   ├── extensions.json             ← Recommended extensions (Pylance, Ruff, Databricks…)
+│   └── launch.json                 ← Debug configs for every pipeline script + API server
 │
 ├── configs/
-│   ├── sources/
-│   │   ├── azure_sql_source.yaml          ← Azure SQL source definition
-│   │   ├── eventhub_source.yaml           ← Event Hubs source definition
-│   │   └── file_source.yaml               ← File-based source definition
-│   └── quality/
-│       ├── bronze_dq_config.yaml          ← Bronze layer DQ rules
-│       ├── silver_dq_config.yaml          ← Silver layer DQ rules (blocking)
-│       └── gold_dq_config.yaml            ← Gold layer DQ rules (blocking + BI gate)
+│   ├── sources/                    ← YAML source configs (SQL, REST, Event Hubs, OData, File)
+│   └── quality/                    ← DQ rule configs per layer (bronze / silver / gold)
+│
+├── docs/
+│   ├── 01_architecture_design.md
+│   ├── 02_data_models_quality_security.md
+│   └── 04_runbook_operational_guidelines.md
+│
+├── infra/terraform/
+│   ├── main.tf                     ← ADLS, Databricks, Key Vault, Monitor, ADF, Event Hubs
+│   └── variables.tf
+│
+├── scripts/
+│   └── seed_local.py               ← Seed all local Delta tables with synthetic data
+│
+├── src/
+│   ├── agents/
+│   │   ├── dq_remediation_agent.py ← GPT-4o DQ failure classifier + auto-remediator
+│   │   ├── gdpr_rtbf_agent.py      ← GDPR Article 17 erasure agent (anonymize / delete)
+│   │   └── nl_to_sql_agent.py      ← Natural language → validated SQL agent
+│   │
+│   ├── api/
+│   │   └── gold_api.py             ← FastAPI REST API over Gold Delta (JWT · RBAC · rate limit)
+│   │
+│   ├── cleaning/
+│   │   ├── bronze_to_silver.py     ← Bronze→Silver PySpark job (OpenLineage instrumented)
+│   │   ├── cleaning_utils.py       ← Reusable PySpark cleaning functions
+│   │   └── quarantine_handler.py
+│   │
+│   ├── dlt/
+│   │   ├── bronze_to_silver_dlt.py ← Delta Live Tables declarative Bronze→Silver pipeline
+│   │   └── silver_to_gold_dlt.py   ← Delta Live Tables declarative Silver→Gold pipeline
+│   │
+│   ├── governance/
+│   │   ├── unity_catalog_setup.py
+│   │   ├── column_encryption.py
+│   │   ├── data_masking.py
+│   │   ├── delta_sharing.py
+│   │   └── row_level_security.py
+│   │
+│   ├── ingestion/
+│   │   ├── batch/                  ← Autoloader + JDBC watermark ingestion
+│   │   ├── cdc/                    ← Debezium CDC over Event Hubs
+│   │   ├── cdf/                    ← Delta Change Data Feed propagation
+│   │   ├── odata/                  ← SAP OData ingestion
+│   │   ├── rest/                   ← Generic paginated REST API poller
+│   │   ├── streaming/              ← Event Hubs structured streaming
+│   │   └── metadata/               ← Ingestion audit metadata logger
+│   │
+│   ├── lineage/
+│   │   └── openlineage_emitter.py  ← OpenLineage events → Marquez / Microsoft Purview
+│   │
+│   ├── ml/
+│   │   ├── feature_engineering.py
+│   │   ├── model_training.py       ← GBT CLV model + MLflow tracking
+│   │   ├── batch_inference.py      ← Daily batch scoring + champion/challenger comparison
+│   │   └── model_drift_monitor.py  ← PSI · KS · JS drift detection + retraining trigger
+│   │
+│   ├── monitoring/
+│   │   └── lakehouse_monitor.py    ← Databricks Lakehouse Monitor integration
+│   │
+│   ├── quality/
+│   │   ├── dq_checks.py            ← DQ engine (completeness · uniqueness · range · freshness)
+│   │   └── alerting.py             ← App Insights metrics + ADO work item creation
+│   │
+│   ├── transformation/
+│   │   └── silver_to_gold.py       ← Batch SCD2 dims + fact_sales (pre-DLT fallback)
+│   │
+│   └── utils/
+│       ├── config.py               ← Shared YAML config loader (LRU cached)
+│       ├── dbutils_shim.py         ← dbutils compatibility shim (Databricks + local)
+│       └── logger.py               ← Shared structured logger (get_logger(__name__))
 │
 ├── tests/
+│   ├── integration/
+│   │   ├── conftest.py             ← Local SparkSession fixture (Delta Lake)
+│   │   ├── synthetic_data.py       ← Deterministic test data generators
+│   │   ├── test_bronze_to_silver.py
+│   │   ├── test_dq_checks.py
+│   │   └── test_silver_to_gold.py
 │   └── unit/
-│       ├── test_cleaning_utils.py         ← pytest: all cleaning utility functions
-│       └── test_dq_checks.py              ← pytest: DQ engine (completeness/uniqueness/range)
+│       ├── test_cleaning_utils.py
+│       └── test_dq_checks.py
 │
-├── infra/
-│   └── terraform/
-│       ├── main.tf                        ← ADLS, Databricks, Key Vault, Monitor, ADF, Event Hubs
-│       └── variables.tf                   ← All configurable variables with validation
-│
-├── .azure-pipelines/
-│   ├── ci-pipeline.yaml                   ← Lint → Unit Tests → Security Scan → Notebook Validation
-│   └── cd-pipeline.yaml                   ← DEV → Integration Tests → TEST (approval) → PROD (approval)
-│
-├── databricks.yml                         ← Databricks Asset Bundle: workflows, clusters, targets
-├── pyproject.toml                         ← Tool configs: ruff, black, isort, mypy, pytest, coverage, bandit
-├── requirements.txt                       ← Pinned Python dependencies (PySpark, testing, linting, security)
-└── README.md                              ← This file
+├── .env.example                    ← Template for all 30+ env vars — copy to .env
+├── .gitignore
+├── .pre-commit-config.yaml         ← ruff · black · bandit · detect-secrets · terraform fmt
+├── databricks.yml                  ← Databricks Asset Bundle: jobs, DLT pipelines, targets
+├── Makefile                        ← make install / test / lint / deploy-dev / deploy-prod
+├── pyproject.toml                  ← ruff · black · mypy · pytest · coverage · bandit config
+├── requirements.txt                ← All pinned Python dependencies
+└── README.md
 ```
 
 ---
 
-## Quick Start
+## Quick Start — New Developer
 
-### 1. Prerequisites
+> **Prerequisite tools:** Python 3.11+, Java 11+, Git, VS Code, GNU Make (or WSL on Windows), Databricks CLI ≥ 0.220, Azure CLI, Terraform ≥ 1.8.
 
-- Azure subscription with Contributor access
-- Azure Databricks Premium workspace with Unity Catalog enabled
-- Azure DevOps organization
-- Terraform ≥ 1.8.0
-- Databricks CLI ≥ 0.220.0
-
-### 2. Provision Infrastructure
-
-```bash
-cd infra/terraform
-
-# Initialize backend (Azure Storage)
-terraform init \
-  -backend-config="resource_group_name=rg-lakehouse-tfstate" \
-  -backend-config="storage_account_name=stlakehousetestate" \
-  -backend-config="container_name=tfstate" \
-  -backend-config="key=dev/terraform.tfstate"
-
-# Plan and apply for dev
-terraform apply \
-  -var="environment=dev" \
-  -var="location=westeurope"
-```
-
-### 3. Set Up Secrets in Key Vault
-
-```bash
-# JDBC connection string for Azure SQL
-az keyvault secret set \
-  --vault-name kv-lakehouse-dev-XXXXXX \
-  --name "azure-sql-sales-jdbc-url" \
-  --value "jdbc:sqlserver://..."
-
-# Event Hubs connection string
-az keyvault secret set \
-  --vault-name kv-lakehouse-dev-XXXXXX \
-  --name "eventhub-sales-connection-string" \
-  --value "Endpoint=sb://..."
-```
-
-### 4. Deploy to Databricks
-
-```bash
-# Authenticate
-databricks configure --host https://<workspace>.azuredatabricks.net
-
-# Deploy to dev
-databricks bundle deploy --target dev
-
-# Setup Unity Catalog (run once)
-databricks runs submit --json '{
-  "existing_cluster_id": "<cluster_id>",
-  "python_file": "dbfs:/src/governance/unity_catalog_setup.py",
-  "parameters": ["--env", "dev", "--storage_account", "<storage_account>"]
-}'
-```
-
-### 5. Run CI/CD
-
-Push a branch and open a Pull Request against `main`.  
-The CI pipeline runs automatically.  
-After merge, CD deploys to DEV automatically; TEST and PROD require approval.
-
----
-
-## Local Developer Setup (VS Code + Databricks Connect)
-
-This section walks a **new developer** through setting up a fully working local
-environment where PySpark jobs can be authored, debugged, and executed in VS Code
-against a remote Databricks cluster — without uploading code to the workspace first.
-
-### Prerequisites
-
-| Tool | Minimum version | Install |
-|---|---|---|
-| Python | 3.11 | [python.org](https://www.python.org/downloads/) |
-| Git | any | [git-scm.com](https://git-scm.com/) |
-| VS Code | any | [code.visualstudio.com](https://code.visualstudio.com/) |
-| Databricks CLI | 0.220.0+ | `pip install databricks-cli` or `winget install Databricks.DatabricksCLI` |
-| Java (JDK) | 11 or 17 | Required by PySpark local mode for unit tests |
-
-> **Azure access required:** You need at least *CAN RESTART* permission on a running
-> Databricks cluster in the DEV workspace, and *READ* access to the Key Vault secrets.
-
----
-
-### Step 1 — Clone the repository
+### 1 — Clone & open in VS Code
 
 ```bash
 git clone https://github.com/PratikhyaManas/AgenticAI-DataEngineering.git
 cd AgenticAI-DataEngineering
+code .
+# VS Code prompts "Install recommended extensions?" → click Yes
+```
+
+### 2 — Configure environment
+
+```bash
+cp .env.example .env      # edit .env with real values (Databricks, OpenAI, ADLS, etc.)
+```
+
+### 3 — Install dependencies & enable git hooks
+
+```bash
+make install
+# Creates .venv, installs all deps (runtime + dev), enables pre-commit hooks
+```
+
+### 4 — Seed local Delta tables
+
+```bash
+make seed-local
+# Writes synthetic Bronze/Silver/Gold/MLOps Delta tables to /tmp/lakehouse_dev
+```
+
+### 5 — Run all tests locally
+
+```bash
+make test              # unit + integration tests (local Spark, no cluster needed)
+make lint              # ruff + black check
+make security          # bandit + pip-audit
+```
+
+### 6 — Debug in VS Code (F5)
+
+`.vscode/launch.json` has pre-built debug configs for:
+- Unit tests / integration tests
+- Every pipeline script (`bronze_to_silver`, `sql_ingestion`, `model_drift_monitor`, …)
+- Gold REST API (`make serve-api` or F5 → "API: Gold REST API")
+- DQ Remediation Agent (dry-run)
+
+### 7 — Deploy to Databricks
+
+```bash
+make bundle-validate   # validate databricks.yml
+make deploy-dev        # deploy all jobs + DLT pipelines to DEV workspace
+# After review:
+make deploy-prod       # prompts for confirmation; requires manual gate in Azure DevOps
 ```
 
 ---
 
-### Step 2 — Create and activate a Python virtual environment
+## Development Workflow (Git → PR → Pipeline → Prod)
 
-```bash
-# Windows (PowerShell)
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# macOS / Linux
-python -m venv .venv
-source .venv/bin/activate
 ```
-
-Install all project and developer dependencies in editable mode:
-
-```bash
-pip install -e ".[dev]"
-```
-
-> `pyproject.toml` contains the full dependency list. The `[dev]` extra installs
-> ruff, black, mypy, pytest, bandit, pip-audit, and databricks-connect.
-
----
-
-### Step 3 — Authenticate with Databricks
-
-#### Option A — Interactive browser login (recommended for individuals)
-
-```bash
-databricks configure --host https://<your-workspace>.azuredatabricks.net
-# Follow the browser prompt for Azure AD / Entra ID login
-```
-
-#### Option B — Personal Access Token
-
-```bash
-databricks configure \
-  --host  https://<your-workspace>.azuredatabricks.net \
-  --token <your-PAT-token>
-```
-
-> Generate a PAT in Databricks UI → User Settings → Developer → Access tokens.
-
-Verify the connection:
-
-```bash
-databricks clusters list
+feature/TICKET-123-my-change
+        │
+        │  git commit   ← pre-commit hooks run (ruff, black, bandit, detect-secrets)
+        │  git push
+        ▼
+   Pull Request (Azure DevOps)
+        │
+        │  PR template auto-populates (.azuredevops/pull_request_template.md)
+        │  CI pipeline triggers (ci-pipeline.yaml):
+        │    Lint → Unit Tests → Integration Tests → Security Scan → bundle validate
+        ▼
+   Code Review + CI green → Merge to main
+        │
+        │  CD pipeline triggers (cd-pipeline.yaml):
+        │    Terraform plan → Deploy DEV (auto) → Integration tests on DEV
+        │    → Manual approval → Deploy TEST
+        │    → Manual approval → Deploy PROD → Git tag release
+        ▼
+   Production
 ```
 
 ---
 
-### Step 4 — Configure Databricks Connect
+## Makefile Reference
 
-Databricks Connect lets you run PySpark code locally while the actual compute
-runs on a **remote Databricks cluster**.
-
-```bash
-# Point Databricks Connect to a running cluster in DEV
-databricks-connect configure \
-  --host    https://<your-workspace>.azuredatabricks.net \
-  --token   <your-PAT-or-use-oauth> \
-  --cluster-id <dev-cluster-id>          # e.g. 1234-567890-abc12345
-
-# Verify the connection
-databricks-connect test
-```
-
-> **Finding your cluster ID:** Databricks UI → Compute → click your cluster →
-> the ID appears in the URL: `.../compute/clusters/<cluster-id>`
-
-#### VS Code settings (`.vscode/settings.json`)
-
-Create this file in the repo root so VS Code uses the venv interpreter automatically:
-
-```json
-{
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
-  "python.terminal.activateEnvironment": true,
-  "python.testing.pytestEnabled": true,
-  "python.testing.pytestArgs": ["tests/unit"],
-  "editor.formatOnSave": true,
-  "[python]": {
-    "editor.defaultFormatter": "ms-python.black-formatter"
-  }
-}
-```
-
-> On macOS/Linux change `Scripts/python.exe` → `bin/python`.
+| Command | What it does |
+|---|---|
+| `make install` | Create `.venv`, install all deps, enable pre-commit hooks |
+| `make test` | Run unit + integration tests |
+| `make test-unit` | Fast unit tests only (no Spark cluster) |
+| `make test-integration` | Integration tests with local Spark + Delta Lake |
+| `make test-coverage` | All tests with HTML coverage report |
+| `make lint` | Ruff linter |
+| `make format` | Black formatter |
+| `make check` | All quality checks (CI equivalent) |
+| `make security` | Bandit + pip-audit |
+| `make seed-local` | Seed local Delta tables with synthetic data |
+| `make serve-api` | Start Gold REST API at localhost:8000 |
+| `make bundle-validate` | Validate `databricks.yml` |
+| `make deploy-dev` | Deploy to DEV Databricks workspace |
+| `make deploy-prod` | Deploy to PROD (confirmation required) |
+| `make infra-plan` | Terraform plan for target environment |
+| `make infra-apply` | Apply Terraform plan |
+| `make pre-commit` | Run all pre-commit hooks against all files |
+| `make clean` | Remove build artefacts and caches |
+| `make clean-all` | Remove everything including `.venv` |
 
 ---
 
-### Step 5 — Set environment variables
+## Key Features
 
-The jobs read secrets from Azure Key Vault at runtime. For local development,
-set the following in your shell session or in a `.env` file (never commit `.env`):
+### Delta Live Tables (DLT)
+`src/dlt/` contains declarative DLT pipelines that replace the imperative batch jobs:
+- `bronze_to_silver_dlt.py` — `@dlt.expect_or_drop` quality gates, schema evolution, quarantine
+- `silver_to_gold_dlt.py` — `dlt.apply_changes` for SCD Type 2 (customers) and SCD Type 1 (products)
 
-```bash
-# PowerShell
-$env:DATABRICKS_HOST     = "https://<workspace>.azuredatabricks.net"
-$env:DATABRICKS_TOKEN    = "<your-PAT>"
-$env:DEV_STORAGE_ACCOUNT = "<storage-account-name>"   # e.g. stdatalakehousedev
-$env:DATABRICKS_CLUSTER_ID = "<dev-cluster-id>"
-```
+### Gold REST API
+`src/api/gold_api.py` — FastAPI service exposing the Gold Delta layer:
+- Azure AD JWT validation (RS256 / JWKS)
+- Role-based access: `analyst` / `data_scientist` / `admin`
+- Rate limiting via SlowAPI; SQL injection prevention via parameterised queries
+- NL-to-SQL router mounted at `/v1/nl-query`
+- Interactive docs at `http://localhost:8000/docs` (when running locally)
 
-```bash
-# bash / zsh
-export DATABRICKS_HOST="https://<workspace>.azuredatabricks.net"
-export DATABRICKS_TOKEN="<your-PAT>"
-export DEV_STORAGE_ACCOUNT="<storage-account-name>"
-export DATABRICKS_CLUSTER_ID="<dev-cluster-id>"
-```
-
-> **Key Vault access:** Make sure your Azure AD account has the `Key Vault Secrets User`
-> role on the DEV Key Vault so the jobs can fetch JDBC / Event Hubs connection strings.
-
----
-
-### Step 6 — Run a job locally via Databricks Connect
-
-With Databricks Connect configured, PySpark operations are transparently executed
-on the remote cluster. Run any job from the VS Code terminal exactly as the
-Databricks Workflow would:
-
-```bash
-# Run the SQL ingestion job against the DEV environment
-python -m src.ingestion.batch.sql_ingestion \
-  --env dev \
-  --source_id azure_sql_sales
-
-# Run Bronze → Silver cleaning
-python -m src.cleaning.bronze_to_silver \
-  --env dev
-
-# Run Silver → Gold transformation (one table at a time)
-python -m src.transformation.silver_to_gold \
-  --env dev \
-  --table dim_customer
-
-python -m src.transformation.silver_to_gold \
-  --env dev \
-  --table dim_product
-
-python -m src.transformation.silver_to_gold \
-  --env dev \
-  --table fact_sales
-
-# Run DQ checks for a specific layer
-python -m src.quality.dq_checks \
-  --env dev \
-  --config configs/quality/bronze_dq_config.yaml
-```
-
-> Databricks Connect routes `SparkSession.builder.getOrCreate()` to the remote
-> cluster automatically — no code changes required.
-
----
-
-### Step 7 — Deploy the full Asset Bundle to DEV
-
-Use the Databricks Asset Bundle CLI to deploy all workflows defined in
-`databricks.yml` to the DEV workspace:
-
-```bash
-# Validate the bundle (dry-run, no deployment)
-databricks bundle validate --target dev
-
-# Deploy workflows and environments to DEV
-databricks bundle deploy --target dev
-
-# List deployed resources
-databricks bundle summary --target dev
-```
-
-Trigger a workflow run manually from the terminal:
-
-```bash
-# Run the daily batch pipeline end-to-end
-databricks bundle run daily_batch_pipeline --target dev
-
-# Tail the run logs
-databricks runs get-output --run-id <run-id-from-above>
-```
-
----
-
-### Step 8 — Run unit tests locally (no cluster needed)
-
-Unit tests use PySpark local mode — no remote cluster or Databricks Connect required:
-
-```bash
-# All unit tests with coverage report
-pytest tests/unit/ -v --cov=src --cov-report=term-missing
-
-# Single test file
-pytest tests/unit/test_cleaning_utils.py -v
-
-# Only tests marked as 'unit'
-pytest tests/unit/ -m unit -v
-```
-
----
-
-### Step 9 — Run the full local quality gate
-
-Run the same checks the CI pipeline runs, before pushing your branch:
-
-```bash
-# 1. Lint
-ruff check src/ tests/
-
-# 2. Format check
-black --check src/ tests/
-
-# 3. Import order
-isort --check-only src/ tests/
-
-# 4. Type checking
-mypy src/
-
-# 5. Unit tests + coverage (must be ≥ 70%)
-pytest tests/unit/ --cov=src --cov-fail-under=70
-
-# 6. SAST
-bandit -r src/ -ll
-
-# 7. Dependency CVE scan
-pip-audit
-```
-
-Or run them all in one shot using the Makefile-style helper (if added):
-
-```bash
-# Shortcut: runs ruff + black + isort + mypy + pytest + bandit + pip-audit
-python -m pytest tests/unit/ --cov=src && ruff check src/ tests/ && black --check src/ tests/
-```
-
----
-
-### Troubleshooting — Common Issues
-
-| Symptom | Likely cause | Fix |
+### Agentic AI Layer
+| Agent | Trigger | Action |
 |---|---|---|
-| `JAVA_HOME is not set` | JDK not installed / not on PATH | Install JDK 11 or 17; set `JAVA_HOME` env var |
-| `databricks-connect test` fails | Wrong cluster ID or cluster is terminated | Start the DEV cluster in Databricks UI, re-run |
-| `ModuleNotFoundError: src` | Virtual env not activated or editable install missing | Activate venv, run `pip install -e ".[dev]"` |
-| `SecretDoesNotExist` from Key Vault | Missing RBAC assignment | Ask admin to add your AD account to `Key Vault Secrets User` role |
-| `DeltaTableNotFoundException` | Tables not yet created in DEV | Run infrastructure provisioning (Terraform) and Unity Catalog setup first |
-| `databricks: command not found` | CLI not in PATH | Re-activate venv or add `.venv/Scripts` (Windows) / `.venv/bin` (Linux) to PATH |
-| `UNAUTHORIZED` on Databricks API calls | Expired PAT or wrong host | Re-run `databricks configure` with a fresh token |
+| **DQ Remediation** (`01:30 UTC daily`) | DQ failures in `dq_results` table | GPT-4o picks strategy → IMPUTE / COERCE / DEDUPLICATE / QUARANTINE / REJECT |
+| **GDPR RTBF** (on-demand) | Subject erasure request | Anonymise (salted SHA-256) or DELETE across all 10 registered Delta tables |
+| **NL-to-SQL** (real-time via API) | Business user question | Schema context → GPT-4o → SQL validation → Databricks SQL execution |
+
+### MLOps Pipeline
+| Component | Description |
+|---|---|
+| `feature_engineering.py` | Feature store integration; customer RFM features |
+| `model_training.py` | GBT CLV model with MLflow tracking + reference distribution artifact |
+| `batch_inference.py` | Daily scoring with 90% prediction intervals; champion/challenger comparison |
+| `model_drift_monitor.py` | PSI / KS / JS drift detection; triggers retraining via Databricks Jobs API when `PSI > 0.25` or `KS p < 0.05` |
+
+### OpenLineage Data Lineage
+`src/lineage/openlineage_emitter.py` emits start/complete/fail events for every pipeline job. Integrates with **Marquez** (open-source) or **Microsoft Purview** via HTTP transport. All Bronze→Silver jobs are already instrumented.
 
 ---
 
-## Data Flow Summary
+## Data Flow
 
 ```
-Sources → landing/ (raw files/DB extracts)
-        → raw/     (Bronze Delta — append-only, schema evolution, immutable)
-        → curated/ (Silver Delta — cleaned, typed, deduplicated, PII masked)
-        → gold/    (Gold Delta — star schema, SCD2 dims, aggregated facts)
-        → quarantine/ (rejected records with error reasons for reprocessing)
+Sources
+  → landing/           (raw files / DB extracts)
+  → raw/ Bronze Delta  (append-only, schema evolution, immutable, OpenLineage)
+  → curated/ Silver    (cleaned, typed, deduped, PII masked, DQ gated)
+  → gold/ Gold Delta   (star schema, SCD2 dims, aggregated facts, CLV features)
+  → quarantine/        (rejected records with error reasons for reprocessing)
 ```
 
-**Orchestration:** Databricks Workflows DAG  
-`ingest → bronze DQ → silver clean → silver DQ → gold dims (parallel) → gold fact → gold DQ`
+**Orchestration DAG:**
+```
+ingest → bronze DQ → bronze DQ agent → silver DLT → silver DQ
+       → gold DLT → gold DQ → batch inference → drift monitor
+```
+
+---
+
+## Compliance
+
+| Requirement | Implementation |
+|---|---|
+| **GDPR Article 17** | `gdpr_rtbf_agent.py` — multi-layer erasure with immutable audit log |
+| **PII masking** | Unity Catalog Column Masks + `data_masking.py` (pseudonymization) |
+| **Encryption** | AES-256 at rest (SSE); TLS 1.2+ in transit; CMK via Key Vault |
+| **Audit logging** | `system.access.audit` (Unity Catalog) + `governance.gdpr_erasure_log` + `governance.nl2sql_audit_log` |
+| **Data lineage** | OpenLineage events per job — queryable in Marquez / Purview |
+| **Row-level security** | `row_level_security.py` — dynamic views scoped to business unit group membership |
+| **Secret management** | All secrets in Azure Key Vault; `src/utils/dbutils_shim.py` provides local fallback via env vars |
 
 ---
 
@@ -514,61 +404,32 @@ Sources → landing/ (raw files/DB extracts)
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Primary orchestrator | Databricks Workflows | Native Spark integration; no extra service cost; GitOps via DAB |
-| File ingestion | Databricks Autoloader | Auto schema evolution, exactly-once checkpointing, ADLS native |
-| Streaming ingest | Structured Streaming + Event Hubs | Micro-batch with watermarking; simpler than Kafka for Azure-native |
+| Primary orchestrator | Databricks Workflows + DLT | Native Spark; GitOps via DAB; DLT handles quality gates declaratively |
+| File ingestion | Databricks Autoloader | Auto schema evolution; exactly-once checkpointing; ADLS native |
+| Streaming ingest | Structured Streaming + Event Hubs + CDC | Micro-batch watermarking; Debezium for row-level CDC |
 | Table format | Delta Lake (only) | ACID, time travel, MERGE, Z-Order, Unity Catalog integration |
-| Incremental load | Watermark-based (max timestamp) | Simple, reliable, handles late data without CDC complexity |
-| SCD strategy | Type 2 for customers, Type 1 for products | Preserve customer history; products need current state only |
-| IaC | Terraform | Widest Azure provider coverage; backend state in ADLS |
+| AI layer | Azure OpenAI GPT-4o | Managed, GDPR-compliant, enterprise SLA; no self-hosted LLM infra |
+| REST API | FastAPI + Databricks SQL Connector | Low-latency Gold reads; standard OpenAPI docs; RBAC via Azure AD |
+| Drift detection | PSI + KS + JS | Covers numeric (PSI/KS) and categorical (JS) features + prediction shift |
+| Secret access | `dbutils_shim.py` | Single abstraction — real `dbutils` on Databricks, env-var fallback locally |
+| Logging | `src/utils/logger.py` | Single `get_logger(__name__)` call — no scattered `print()` across modules |
+| IaC | Terraform | Widest Azure provider coverage; remote state in ADLS |
 | CI/CD | Azure DevOps Pipelines + DAB | Native ADO integration; DAB handles workspace promotion |
-| Security | Unity Catalog + Azure Key Vault | Single governance plane; no secrets in code |
 
 ---
 
-## Compliance Notes
+## Troubleshooting
 
-- **GDPR**: PII columns (`email`, `phone`, `name`) are masked in Unity Catalog using Column Masks.  
-  Data engineers see plaintext; all other roles see masked values.  
-  Quarantine records retain raw PII for forensics — access restricted to `data_engineers` only.
-
-- **Data Subject Requests (DSR)**: Use `customer_id` as the pseudonymous key to identify and  
-  delete/export all records. Quarantine table includes `raw_record` JSON — must be included in DSR scope.
-
-- **Audit Logging**: All data access events recorded in `system.access.audit` (Unity Catalog system table).  
-  Databricks diagnostic logs stream to Log Analytics for 90-day retention.
-
-- **Encryption**: Storage Service Encryption (AES-256) at rest; TLS 1.2+ in transit.  
-  Customer-Managed Keys (CMK) configurable via Terraform (Key Vault key reference).
-
----
-
-## Testing
-
-```bash
-# Install all dev dependencies (uses pyproject.toml)
-pip install -e ".[dev]"
-
-# Run unit tests with coverage (settings from [tool.pytest] + [tool.coverage])
-pytest tests/unit/ --cov=src --cov-report=term-missing
-
-# Run linting (settings from [tool.ruff])
-ruff check src/ tests/
-
-# Check formatting (settings from [tool.black])
-black --check src/ tests/
-
-# Type checking (settings from [tool.mypy])
-mypy src/
-
-# SAST security scan (settings from [tool.bandit])
-bandit -r src/
-
-# Dependency CVE scan
-pip-audit
-```
-
-All tool behaviour (line length, target Python version, ignored rules, coverage threshold, test markers) is centralised in `pyproject.toml` — no per-tool config files needed.
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `JAVA_HOME is not set` | JDK not installed | Install JDK 11 or 17; set `JAVA_HOME` |
+| `ModuleNotFoundError: src` | Venv not activated or editable install missing | Activate `.venv`; run `make install` |
+| `KeyError: secret not found` | Secret env var missing for local dev | Set `SCOPE_KEY=value` env var (see `.env.example`) |
+| `DeltaTableNotFoundException` | Tables not seeded locally | Run `make seed-local` |
+| `databricks bundle validate` fails | `databricks.yml` syntax error | Run `make bundle-validate` to see the exact error |
+| `ruff: command not found` | Venv not active | Run `source .venv/bin/activate` (Linux) or `.\.venv\Scripts\Activate.ps1` (Windows) |
+| `UNAUTHORIZED` on Databricks API | Expired PAT | Re-run `databricks configure` with a fresh token |
+| `PSI / KS import error` | `scipy` not installed | Run `pip install scipy` or `make install` |
 
 ---
 
@@ -577,6 +438,9 @@ All tool behaviour (line length, target Python version, ignored rules, coverage 
 - [Architecture & Design](docs/01_architecture_design.md)
 - [Data Models, Quality & Security](docs/02_data_models_quality_security.md)
 - [Runbook & Operational Guidelines](docs/04_runbook_operational_guidelines.md)
-- [Azure Databricks Documentation](https://docs.databricks.com)
-- [Unity Catalog Overview](https://docs.databricks.com/en/data-governance/unity-catalog/index.html)
-- [Delta Lake Documentation](https://docs.delta.io/latest/index.html)
+- [Azure Databricks Asset Bundles](https://docs.databricks.com/en/dev-tools/bundles/)
+- [Delta Live Tables](https://docs.databricks.com/en/delta-live-tables/)
+- [Unity Catalog](https://docs.databricks.com/en/data-governance/unity-catalog/)
+- [OpenLineage](https://openlineage.io/)
+- [MLflow Model Registry](https://mlflow.org/docs/latest/model-registry.html)
+

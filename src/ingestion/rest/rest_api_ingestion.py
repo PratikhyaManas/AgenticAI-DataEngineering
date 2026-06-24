@@ -28,6 +28,8 @@ from typing import Any, Generator
 
 import requests
 from requests.adapters import HTTPAdapter
+
+from src.utils.dbutils_shim import get_dbutils
 from urllib3.util.retry import Retry
 
 from pyspark.sql import SparkSession, DataFrame
@@ -80,19 +82,20 @@ def _get_auth_headers(auth_cfg: dict, spark: SparkSession) -> dict[str, str]:
     """
     auth_type    = auth_cfg.get("type", "bearer_token")
     secret_scope = auth_cfg["secret_scope"]
+    _dbutils     = get_dbutils(spark)
 
     if auth_type == "bearer_token":
-        token = dbutils.secrets.get(scope=secret_scope, key=auth_cfg["token_key"])  # noqa: F821
+        token = _dbutils.secrets.get(scope=secret_scope, key=auth_cfg["token_key"])
         return {"Authorization": f"Bearer {token}"}
 
     if auth_type == "api_key":
-        key       = dbutils.secrets.get(scope=secret_scope, key=auth_cfg["api_key_secret"])  # noqa: F821
+        key       = _dbutils.secrets.get(scope=secret_scope, key=auth_cfg["api_key_secret"])
         key_header = auth_cfg.get("api_key_header", "X-Api-Key")
         return {key_header: key}
 
     if auth_type == "oauth2_client_credentials":
-        client_id     = dbutils.secrets.get(scope=secret_scope, key=auth_cfg["client_id_key"])   # noqa: F821
-        client_secret = dbutils.secrets.get(scope=secret_scope, key=auth_cfg["client_secret_key"])  # noqa: F821
+        client_id     = _dbutils.secrets.get(scope=secret_scope, key=auth_cfg["client_id_key"])
+        client_secret = _dbutils.secrets.get(scope=secret_scope, key=auth_cfg["client_secret_key"])
         token_url     = auth_cfg["token_url"]
         resp = requests.post(
             token_url,

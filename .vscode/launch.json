@@ -1,0 +1,178 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+
+    // =========================================================================
+    // Unit tests — run pytest for a single test file
+    // =========================================================================
+    {
+      "name": "pytest: Unit Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/unit/", "-v", "--tb=short"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "TEST_ENV": "dev"
+      }
+    },
+
+    // =========================================================================
+    // Integration tests — local Spark (no cluster needed)
+    // =========================================================================
+    {
+      "name": "pytest: Integration Tests (local Spark)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/integration/", "-v", "--tb=short", "-m", "not slow"],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "TEST_ENV": "dev",
+        "OPENLINEAGE_TRANSPORT": "console",
+        "LOCAL_DELTA_BASE": "/tmp/lakehouse_dev"
+      }
+    },
+
+    // =========================================================================
+    // Seed local Delta tables
+    // =========================================================================
+    {
+      "name": "Seed: Local Delta Tables",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/seed_local.py",
+      "args": ["--clean"],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "LOCAL_DELTA_BASE": "/tmp/lakehouse_dev"
+      }
+    },
+
+    // =========================================================================
+    // Bronze → Silver cleaning job (local debug)
+    // =========================================================================
+    {
+      "name": "Job: Bronze → Silver (local)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/cleaning/bronze_to_silver.py",
+      "args": ["--env", "dev"],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "LAKEHOUSE_ENV": "dev",
+        "OPENLINEAGE_TRANSPORT": "console",
+        "LOCAL_DELTA_BASE": "/tmp/lakehouse_dev"
+      }
+    },
+
+    // =========================================================================
+    // Gold REST API (FastAPI local server)
+    // =========================================================================
+    {
+      "name": "API: Gold REST API (localhost:8000)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "src.api.gold_api:app",
+        "--reload",
+        "--port", "8000",
+        "--log-level", "debug"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+
+    // =========================================================================
+    // DQ Remediation Agent (dry-run)
+    // =========================================================================
+    {
+      "name": "Agent: DQ Remediation (dry-run)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/agents/dq_remediation_agent.py",
+      "args": [
+        "--env", "dev",
+        "--openai-endpoint", "${env:AZURE_OPENAI_ENDPOINT}",
+        "--openai-key-secret", "openai-api-key",
+        "--openai-secret-scope", "kv-lakehouse-scope",
+        "--dry-run"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+
+    // =========================================================================
+    // Model Drift Monitor (dry-run)
+    // =========================================================================
+    {
+      "name": "ML: Model Drift Monitor (dry-run)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/ml/model_drift_monitor.py",
+      "args": [
+        "--env", "dev",
+        "--model-name", "clv_forecasting",
+        "--databricks-host", "${env:DATABRICKS_HOST}",
+        "--token-secret-scope", "kv-lakehouse-scope",
+        "--token-secret-key", "databricks-token",
+        "--retraining-job-id", "1",
+        "--dry-run"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    },
+
+    // =========================================================================
+    // Autoloader ingestion (local debug against dev workspace)
+    // =========================================================================
+    {
+      "name": "Ingestion: Autoloader (dev)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/ingestion/batch/autoloader_ingestion.py",
+      "args": ["--env", "dev", "--source_id", "file_sales_orders"],
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      }
+    }
+  ],
+
+  // =========================================================================
+  // Compound launches
+  // =========================================================================
+  "compounds": [
+    {
+      "name": "All Tests",
+      "configurations": [
+        "pytest: Unit Tests",
+        "pytest: Integration Tests (local Spark)"
+      ],
+      "stopAll": true
+    }
+  ]
+}

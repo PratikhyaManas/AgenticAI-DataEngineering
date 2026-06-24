@@ -1,0 +1,58 @@
+# ==============================================================================
+# AgenticAI-DataEngineering — .gitignore
+# ==============================================================================
+
+# --- Secrets & local config ---
+.env
+.secrets.baseline
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+.eggs/
+
+# --- Testing & coverage ---
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+junit/
+
+# --- Type checkers ---
+.mypy_cache/
+.ruff_cache/
+
+# --- Local Delta tables ---
+/tmp/lakehouse_dev/
+/tmp/lakehouse_ci/
+
+# --- Terraform ---
+infra/terraform/*.tfplan
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+
+# --- IDE ---
+# Commit settings.json, extensions.json, launch.json (shared team config)
+# Ignore personal/local-only files
+.vscode/*.code-workspace
+.vscode/tasks.json
+.idea/
+*.iml
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Databricks CLI ---
+.databricks/

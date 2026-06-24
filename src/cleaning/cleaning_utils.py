@@ -29,10 +29,6 @@ def cast_columns(df: DataFrame, cast_map: Dict[str, str]) -> DataFrame:
     Records that fail casting produce NULL (Spark default for safe cast).
     Downstream null checks will route these to quarantine.
     """
-    cols = [
-        F.col(name).cast(target).alias(name) if name in cast_map else F.col(name)
-        for name, target in [(f.name, cast_map.get(f.name, f.name)) for f in df.schema.fields]
-    ]
     return df.select(
         *[
             F.col(f.name).cast(cast_map[f.name]).alias(f.name)

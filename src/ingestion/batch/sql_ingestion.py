@@ -13,6 +13,11 @@ No credentials are stored in code or config files.
 import argparse
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+
+from src.utils.logger import get_logger
+from src.utils.dbutils_shim import get_dbutils
+
+_log = get_logger(__name__)
 from pyspark.storagelevel import StorageLevel
 
 from src.ingestion.metadata.metadata_logger import (
@@ -45,7 +50,7 @@ def ingest_sql_table(
     entity    = table_cfg["target_entity"]
 
     secret_scope = conn_cfg["secret_scope"]
-    jdbc_url     = dbutils.secrets.get(scope=secret_scope, key=conn_cfg["secret_key_jdbc_url"])  # noqa: F821
+    jdbc_url     = get_dbutils(spark).secrets.get(scope=secret_scope, key=conn_cfg["secret_key_jdbc_url"])
 
     ingest_cfg       = config["ingestion"]
     watermark_col    = ingest_cfg.get("watermark_column", "updated_at")
@@ -130,7 +135,7 @@ def ingest_sql_table(
             new_watermark = None
 
         if rows_read == 0:
-            print(f"[INFO] No new rows for {entity} since {last_watermark}. Skipping write.")
+            _log.info("No new rows for %s since %s — skipping write.", entity, last_watermark)
             status = "SUCCESS"
             new_watermark = last_watermark
         else:
@@ -153,7 +158,7 @@ def ingest_sql_table(
 
             rows_written = rows_read
             status = "SUCCESS"
-            print(f"[INFO] Written {rows_written} rows to {catalog_table}. New watermark: {new_watermark}")
+            _log.info("Written %d rows to %s — new watermark: %s", rows_written, catalog_table, new_watermark)
 
         raw_df.unpersist()
 

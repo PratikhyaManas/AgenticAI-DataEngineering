@@ -39,6 +39,8 @@ from pyspark.sql.types import (
 )
 from pyspark.storagelevel import StorageLevel
 
+from src.utils.dbutils_shim import get_dbutils
+
 from src.ingestion.metadata.metadata_logger import (
     create_metadata_table_if_not_exists,
     start_run,
@@ -78,7 +80,7 @@ def _build_eventhub_conf(config: dict, spark: SparkSession) -> dict:
     conn_cfg     = config["connection"]
     stream_cfg   = config.get("streaming", {})
     secret_scope = conn_cfg["secret_scope"]
-    conn_str     = dbutils.secrets.get(  # noqa: F821
+    conn_str     = get_dbutils(spark).secrets.get(
         scope=secret_scope,
         key=conn_cfg["connection_string_secret_key"],
     )

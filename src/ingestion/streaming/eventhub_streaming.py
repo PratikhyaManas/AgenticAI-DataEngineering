@@ -13,6 +13,11 @@ appear in code.
 
 import argparse
 import json
+
+from src.utils.logger import get_logger
+from src.utils.dbutils_shim import get_dbutils
+
+_log = get_logger(__name__)
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, LongType, DoubleType, TimestampType
@@ -52,7 +57,7 @@ def build_eventhub_conf(config: dict, spark: SparkSession) -> dict:
     conn_cfg   = config["connection"]
     stream_cfg = config["streaming"]
     secret_scope = conn_cfg["secret_scope"]
-    conn_str     = dbutils.secrets.get(  # noqa: F821
+    conn_str     = get_dbutils(spark).secrets.get(
         scope=secret_scope,
         key=conn_cfg["connection_string_secret_key"]
     )
@@ -165,7 +170,7 @@ def ingest_eventhub_stream(
         .toTable(catalog_table)
     )
 
-    print(f"[INFO] Streaming query started: {write_query.id} → {catalog_table}")
+    _log.info("Streaming query started: %s → %s", write_query.id, catalog_table)
     write_query.awaitTermination()
 
 

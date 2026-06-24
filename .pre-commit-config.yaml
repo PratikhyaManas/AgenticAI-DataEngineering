@@ -1,0 +1,135 @@
+# ==============================================================================
+# Pre-commit hooks — AgenticAI-DataEngineering
+# ==============================================================================
+# Install:  pre-commit install  (or `make install-hooks`)
+# Run all:  pre-commit run --all-files  (or `make pre-commit`)
+# Update:   pre-commit autoupdate
+# ==============================================================================
+
+default_language_version:
+  python: python3.11
+
+repos:
+  # ----------------------------------------------------------------------------
+  # General file hygiene
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: debug-statements
+
+  # ----------------------------------------------------------------------------
+  # Detect secrets accidentally committed (uses baseline file)
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: |
+          (?x)^(
+            .env.example|
+            tests/.*
+          )$
+
+  # ----------------------------------------------------------------------------
+  # Python formatting — black
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        language_version: python3.11
+        args: [--line-length=100]
+
+  # ----------------------------------------------------------------------------
+  # Python linting & import ordering — ruff (replaces flake8 + isort)
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.7
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # ----------------------------------------------------------------------------
+  # Python type checking — mypy
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - types-requests
+          - types-PyYAML
+        args: [--ignore-missing-imports]
+        files: ^src/
+        exclude: ^src/dlt/  # DLT imports only available in Databricks runtime
+
+  # ----------------------------------------------------------------------------
+  # Python security scanning — bandit
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args: [-r, src/, -ll, --skip, B101,B105,B106]
+        exclude: ^tests/
+
+  # ----------------------------------------------------------------------------
+  # YAML linting
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args:
+          - --config-data
+          - |
+            extends: default
+            rules:
+              line-length:
+                max: 120
+              truthy:
+                allowed-values: ['true', 'false', 'yes', 'no', 'on', 'off']
+              comments:
+                require-starting-space: true
+        exclude: |
+          (?x)^(
+            .azure-pipelines/.*|
+            configs/.*
+          )$
+
+  # ----------------------------------------------------------------------------
+  # Terraform formatting
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.91.0
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+        args:
+          - --init-args=-backend=false
+
+  # ----------------------------------------------------------------------------
+  # Conventional commit message format
+  # ----------------------------------------------------------------------------
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.27.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]

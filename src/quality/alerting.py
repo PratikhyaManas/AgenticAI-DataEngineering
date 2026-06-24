@@ -12,6 +12,8 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from src.utils.dbutils_shim import get_dbutils
+
 logger = logging.getLogger(__name__)
 
 
@@ -187,7 +189,7 @@ def create_devops_work_item_on_failure(
         from azure.devops.connection import Connection
         from msrest.authentication import BasicAuthentication
 
-        pat = dbutils.secrets.get(scope="kv-lakehouse-scope", key=pat_secret_key)  # noqa: F821
+        pat = get_dbutils().secrets.get(scope="kv-lakehouse-scope", key=pat_secret_key)
         credentials = BasicAuthentication("", pat)
         connection  = Connection(base_url=organization_url, creds=credentials)
         wit_client  = connection.clients.get_work_item_tracking_client()

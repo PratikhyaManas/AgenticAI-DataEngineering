@@ -1,0 +1,122 @@
+{
+  // ===========================================================================
+  // Python — interpreter + analysis
+  // ===========================================================================
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+
+  // Pylance for IntelliSense (type stubs live in pyproject.toml [tool.mypy])
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.extraPaths": ["${workspaceFolder}/src"],
+  "python.analysis.ignore": ["infra/"],
+
+  // ===========================================================================
+  // Linting — ruff (replaces flake8 + isort + pyupgrade)
+  // ===========================================================================
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  "ruff.enable": true,
+  "ruff.lint.run": "onSave",
+  "ruff.organizeImports": true,
+
+  // ===========================================================================
+  // Testing — pytest
+  // ===========================================================================
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": [
+    "tests/",
+    "--tb=short",
+    "-v"
+  ],
+  "python.testing.unittestEnabled": false,
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+
+  // ===========================================================================
+  // Editor — consistent with black/ruff settings in pyproject.toml
+  // ===========================================================================
+  "editor.rulers": [100],
+  "editor.tabSize": 4,
+  "editor.insertSpaces": true,
+  "editor.trimAutoWhitespace": true,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.eol": "\n",
+
+  // ===========================================================================
+  // Search / Explorer — exclude build artefacts and venv
+  // ===========================================================================
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/.mypy_cache": true,
+    "**/.venv": true,
+    "**/node_modules": true,
+    "**/.eggs": true,
+    "**/*.egg-info": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/build": true,
+    "**/dist": true,
+    "infra/terraform/.terraform": true
+  },
+
+  // ===========================================================================
+  // YAML — Databricks bundle + Azure Pipelines schemas
+  // ===========================================================================
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/microsoft/azure-pipelines-vscode/master/service-schema.json": [
+      ".azure-pipelines/*.yaml",
+      ".azure-pipelines/*.yml"
+    ]
+  },
+  "yaml.format.enable": true,
+
+  // ===========================================================================
+  // Terraform
+  // ===========================================================================
+  "[terraform]": {
+    "editor.defaultFormatter": "hashicorp.terraform",
+    "editor.formatOnSave": true
+  },
+
+  // ===========================================================================
+  // Terminal — auto-activate venv on open
+  // ===========================================================================
+  "terminal.integrated.env.linux": {
+    "PYTHONPATH": "${workspaceFolder}"
+  },
+  "terminal.integrated.env.windows": {
+    "PYTHONPATH": "${workspaceFolder}"
+  },
+  "terminal.integrated.env.osx": {
+    "PYTHONPATH": "${workspaceFolder}"
+  },
+
+  // ===========================================================================
+  // Git
+  // ===========================================================================
+  "git.enableSmartCommit": false,
+  "git.confirmSync": true,
+  "git.autofetch": true,
+
+  // ===========================================================================
+  // Spell check — ignore common data engineering terms
+  // ===========================================================================
+  "cSpell.words": [
+    "Autoloader", "autoloader", "Databricks", "databricks",
+    "lakehouse", "mlflow", "pyspark", "openlineage",
+    "adls", "gdpr", "rtbf", "upsert", "watermark",
+    "debezium", "eventhub", "odata", "fastapi", "uvicorn",
+    "slowapi", "sqlfluff", "bandit", "isort"
+  ]
+}

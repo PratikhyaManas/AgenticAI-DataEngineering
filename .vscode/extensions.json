@@ -1,0 +1,62 @@
+{
+  "recommendations": [
+    // ===========================================================================
+    // Python core
+    // ===========================================================================
+    "ms-python.python",              // Python language support
+    "ms-python.pylance",             // Fast IntelliSense + type checking
+    "ms-python.debugpy",             // Python debugger
+    "charliermarsh.ruff",            // Ruff linter + formatter (replaces flake8/black/isort)
+
+    // ===========================================================================
+    // Testing
+    // ===========================================================================
+    "hbenl.vscode-test-explorer",    // Test Explorer UI
+    "littlefoxteam.vscode-python-test-adapter", // pytest adapter
+
+    // ===========================================================================
+    // Azure & Databricks
+    // ===========================================================================
+    "ms-azuretools.vscode-azureresourcegroups", // Azure Resource Groups explorer
+    "ms-azure-devops.azure-pipelines",           // Azure Pipelines YAML syntax + validation
+    "databricks.databricks",                     // Databricks extension (cluster, notebook, bundle)
+
+    // ===========================================================================
+    // Infrastructure
+    // ===========================================================================
+    "hashicorp.terraform",           // Terraform syntax + validation
+    "ms-kubernetes-tools.vscode-kubernetes-tools", // K8s (for future containerisation)
+
+    // ===========================================================================
+    // Data & notebooks
+    // ===========================================================================
+    "ms-toolsai.jupyter",            // Jupyter notebooks
+    "mechatroner.rainbow-csv",       // CSV file viewer
+
+    // ===========================================================================
+    // Git & collaboration
+    // ===========================================================================
+    "eamodio.gitlens",               // Git blame, history, PR annotations
+    "github.vscode-pull-request-github", // PR review (if using GitHub mirror)
+    "mhutchie.git-graph",            // Visual git log
+
+    // ===========================================================================
+    // YAML / JSON / TOML
+    // ===========================================================================
+    "redhat.vscode-yaml",            // YAML schema validation (pipelines, configs)
+    "tamasfe.even-better-toml",      // pyproject.toml highlighting
+
+    // ===========================================================================
+    // Quality of life
+    // ===========================================================================
+    "streetsidesoftware.code-spell-checker",  // Spell checker
+    "usernamehw.errorlens",          // Inline error messages
+    "gruntfuggly.todo-tree",         // TODO / FIXME tracker
+    "ms-vscode.makefile-tools"       // Makefile task runner integration
+  ],
+  "unwantedRecommendations": [
+    "ms-python.isort",               // Replaced by ruff's import organiser
+    "ms-python.flake8",              // Replaced by ruff
+    "ms-python.black-formatter"      // Replaced by ruff formatter
+  ]
+}
