@@ -11,6 +11,7 @@ No credentials are stored in code or config files.
 """
 
 import argparse
+import os
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
@@ -194,7 +195,18 @@ if __name__ == "__main__":
     parser.add_argument("--storage-account", required=True,
                         dest="storage_account",
                         help="ADLS Gen2 storage account name")
+    parser.add_argument("--openlineage-transport", default=None)
+    parser.add_argument("--openlineage-url",       default=None)
+    parser.add_argument("--openlineage-namespace", default=None)
     args = parser.parse_args()
+
+    if args.openlineage_transport is not None:
+        os.environ["OPENLINEAGE_TRANSPORT"] = args.openlineage_transport
+    if args.openlineage_url is not None:
+        os.environ["OPENLINEAGE_URL"] = args.openlineage_url
+    if args.openlineage_namespace is not None:
+        os.environ["OPENLINEAGE_NAMESPACE"] = args.openlineage_namespace
+    os.environ["LAKEHOUSE_ENV"] = args.env
 
     spark = build_spark_session()
     spark.conf.set("spark.lakehouse.storage_account", args.storage_account)

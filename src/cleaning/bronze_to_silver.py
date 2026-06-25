@@ -11,6 +11,7 @@ Bad records are written to the quarantine Delta table with error reasons.
 """
 
 import argparse
+import os
 import uuid
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -172,7 +173,18 @@ def run_cleaning_job(spark: SparkSession, env: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bronze → Silver cleaning job")
     parser.add_argument("--env", required=True, help="dev | test | prod")
+    parser.add_argument("--openlineage-transport", default=None)
+    parser.add_argument("--openlineage-url",       default=None)
+    parser.add_argument("--openlineage-namespace", default=None)
     args = parser.parse_args()
+
+    if args.openlineage_transport is not None:
+        os.environ["OPENLINEAGE_TRANSPORT"] = args.openlineage_transport
+    if args.openlineage_url is not None:
+        os.environ["OPENLINEAGE_URL"] = args.openlineage_url
+    if args.openlineage_namespace is not None:
+        os.environ["OPENLINEAGE_NAMESPACE"] = args.openlineage_namespace
+    os.environ["LAKEHOUSE_ENV"] = args.env
 
     spark = SparkSession.builder.getOrCreate()
     run_cleaning_job(spark, args.env)
