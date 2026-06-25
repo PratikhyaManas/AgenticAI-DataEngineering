@@ -45,9 +45,13 @@ flowchart TD
     end
 
     subgraph Agents["Agentic AI Layer"]
+        ORCH[Orchestrator Agent\nGPT-4o Planner]
         DQA[DQ Remediation Agent\nGPT-4o]
         GDPR[GDPR RTBF Agent]
         NL[NL-to-SQL Agent\nGPT-4o]
+        PD[Pipeline Diagnosis\nGPT-4o]
+        SD[Schema Drift Alert]
+        MDR[Model Drift Retrain]
     end
 
     subgraph ML["ML / MLOps"]
@@ -76,11 +80,12 @@ flowchart TD
     GLD --> FA --> NL
     GLD --> ML
     DM --> MT
+    ORCH --> DQA & GDPR & NL & PD & SD & MDR
     DQA --> RAW & CUR
     GDPR --> RAW & CUR & GLD
     LIN --> RAW & CUR & GLD
     KV --> DBR & Agents
-    AOAI --> DQA & NL
+    AOAI --> ORCH & DQA & NL & PD
     APPINS --> DQ & MON
     ADO --> DBR
     TF --> ADLS & DBR & KV
@@ -96,6 +101,7 @@ flowchart TD
 | **Data Cleaning Agent** | `src/cleaning/` · `src/dlt/bronze_to_silver_dlt.py` — Bronze→Silver, DLT pipeline, quarantine |
 | **Transformation Agent** | `src/transformation/` · `src/dlt/silver_to_gold_dlt.py` — SCD2 dims, fact_sales, DLT pipeline |
 | **DQ & Observability Agent** | `src/quality/` · `configs/quality/` — DQ engine, App Insights alerting, Lakehouse Monitor |
+| **Orchestrator Agent** | `src/agents/orchestrator_agent.py` — GPT-4o event planner; routes DQ/GDPR/NL/PIPELINE/SCHEMA/MODEL_DRIFT events to sub-agents; rule-based fallback; immutable audit log |
 | **DQ Remediation Agent** | `src/agents/dq_remediation_agent.py` — GPT-4o classifies failures → auto-impute/quarantine/reject |
 | **GDPR RTBF Agent** | `src/agents/gdpr_rtbf_agent.py` — Article 17 erasure across all Delta layers with audit log |
 | **NL-to-SQL Agent** | `src/agents/nl_to_sql_agent.py` — Natural language → validated SQL → Gold layer execution |
@@ -141,6 +147,7 @@ AgenticAI-DataEngineering/
 │
 ├── src/
 │   ├── agents/
+│   │   ├── orchestrator_agent.py   ← GPT-4o planner + multi-agent event router (NEW)
 │   │   ├── dq_remediation_agent.py ← GPT-4o DQ failure classifier + auto-remediator
 │   │   ├── gdpr_rtbf_agent.py      ← GDPR Article 17 erasure agent (anonymize / delete)
 │   │   └── nl_to_sql_agent.py      ← Natural language → validated SQL agent
@@ -348,11 +355,26 @@ feature/TICKET-123-my-change
 - Interactive docs at `http://localhost:8000/docs` (when running locally)
 
 ### Agentic AI Layer
+
+All agents are coordinated by the **Orchestrator Agent** (`src/agents/orchestrator_agent.py`), which polls `governance.orchestrator_events` every 15 minutes, uses GPT-4o to plan the optimal routing, and dispatches to the right sub-agent. A rule-based fallback engages automatically when the LLM is unavailable or returns confidence < 0.5. Every routing decision is written to the immutable `governance.orchestrator_log` Delta table.
+
 | Agent | Trigger | Action |
 |---|---|---|
-| **DQ Remediation** (`01:30 UTC daily`) | DQ failures in `dq_results` table | GPT-4o picks strategy → IMPUTE / COERCE / DEDUPLICATE / QUARANTINE / REJECT |
-| **GDPR RTBF** (on-demand) | Subject erasure request | Anonymise (salted SHA-256) or DELETE across all 10 registered Delta tables |
-| **NL-to-SQL** (real-time via API) | Business user question | Schema context → GPT-4o → SQL validation → Databricks SQL execution |
+| **Orchestrator** (`every 15 min`) | Any event in `governance.orchestrator_events` | GPT-4o planner routes to sub-agent; logs decision + result to `orchestrator_log` |
+| **DQ Remediation** (`01:30 UTC daily` or via orchestrator) | DQ failures in `dq_results` table | GPT-4o picks strategy → IMPUTE / COERCE / DEDUPLICATE / QUARANTINE / REJECT |
+| **GDPR RTBF** (on-demand or via orchestrator) | Subject erasure request | Anonymise (salted SHA-256) or DELETE across all 10 registered Delta tables |
+| **NL-to-SQL** (real-time via API or orchestrator) | Business user question | Schema context → GPT-4o → SQL validation → Databricks SQL execution |
+| **Pipeline Diagnosis** (via orchestrator) | `PIPELINE_FAILURE` event | GPT-4o root-cause analysis + remediation recommendation; escalated for human review |
+| **Schema Drift Alert** (via orchestrator) | `SCHEMA_DRIFT` event | Logs drift to `governance.schema_drift_log`; escalates for human approval |
+| **Model Drift Retrain** (via orchestrator) | `MODEL_DRIFT` event with severity HIGH/CRITICAL | Triggers retraining Databricks Workflow via Jobs REST API |
+
+**Event types recognised by the orchestrator:**
+
+```
+DQ_FAILURE | GDPR_ERASURE_REQUEST | NL_QUERY | PIPELINE_FAILURE | SCHEMA_DRIFT | MODEL_DRIFT
+```
+
+Upstream jobs write events to `governance.orchestrator_events` (e.g. DQ checks write `DQ_FAILURE` on threshold breach). Events can also be injected on-demand using the `--event-type` / `--payload` CLI flags.
 
 ### MLOps Pipeline
 | Component | Description |
@@ -380,8 +402,17 @@ Sources
 
 **Orchestration DAG:**
 ```
-ingest → bronze DQ → bronze DQ agent → silver DLT → silver DQ
+ingest → bronze DQ → silver DLT → silver DQ
        → gold DLT → gold DQ → batch inference → drift monitor
+
+Orchestrator (every 15 min):
+  orchestrator_events
+    ├── DQ_FAILURE        → DQ Remediation Agent
+    ├── GDPR_ERASURE_REQUEST → GDPR RTBF Agent
+    ├── NL_QUERY          → NL-to-SQL Agent
+    ├── PIPELINE_FAILURE  → Pipeline Diagnosis (GPT-4o)
+    ├── SCHEMA_DRIFT      → Schema Drift Alert
+    └── MODEL_DRIFT       → Model Drift Retrain trigger
 ```
 
 ---
@@ -393,7 +424,7 @@ ingest → bronze DQ → bronze DQ agent → silver DLT → silver DQ
 | **GDPR Article 17** | `gdpr_rtbf_agent.py` — multi-layer erasure with immutable audit log |
 | **PII masking** | Unity Catalog Column Masks + `data_masking.py` (pseudonymization) |
 | **Encryption** | AES-256 at rest (SSE); TLS 1.2+ in transit; CMK via Key Vault |
-| **Audit logging** | `system.access.audit` (Unity Catalog) + `governance.gdpr_erasure_log` + `governance.nl2sql_audit_log` |
+| **Audit logging** | `system.access.audit` (Unity Catalog) + `governance.gdpr_erasure_log` + `governance.nl2sql_audit_log` + `governance.orchestrator_log` (append-only, every routing decision) |
 | **Data lineage** | OpenLineage events per job — queryable in Marquez / Purview |
 | **Row-level security** | `row_level_security.py` — dynamic views scoped to business unit group membership |
 | **Secret management** | All secrets in Azure Key Vault; `src/utils/dbutils_shim.py` provides local fallback via env vars |
@@ -405,6 +436,7 @@ ingest → bronze DQ → bronze DQ agent → silver DLT → silver DQ
 | Decision | Choice | Rationale |
 |---|---|---|
 | Primary orchestrator | Databricks Workflows + DLT | Native Spark; GitOps via DAB; DLT handles quality gates declaratively |
+| Multi-agent coordination | Orchestrator Agent + GPT-4o planner | Event-driven routing from `orchestrator_events` Delta table; rule-based fallback; confidence-gated LLM dispatch |
 | File ingestion | Databricks Autoloader | Auto schema evolution; exactly-once checkpointing; ADLS native |
 | Streaming ingest | Structured Streaming + Event Hubs + CDC | Micro-batch watermarking; Debezium for row-level CDC |
 | Table format | Delta Lake (only) | ACID, time travel, MERGE, Z-Order, Unity Catalog integration |
