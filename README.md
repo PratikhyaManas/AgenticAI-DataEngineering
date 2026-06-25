@@ -1,4 +1,5 @@
 # Azure Lakehouse Data Platform
+
 ## Multi-Agent Agentic AI — Data Engineering Blueprint
 
 > **Stack:** Azure Databricks (Unity Catalog) · ADLS Gen2 · Azure OpenAI GPT-4o · FastAPI · MLflow · OpenLineage · Azure DevOps · Terraform
