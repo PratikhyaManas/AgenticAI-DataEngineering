@@ -804,11 +804,9 @@ resources:
   pipelines:
     bronze_to_silver_dlt:
       name: "lakehouse-bronze-to-silver-dlt-${var.env}"
-      description: "DLT pipeline: Autoloader → Bronze (raw) → validated → Silver. Replaces bronze_to_silver.py batch job."
       catalog: "${var.env}_lakehouse"
-      target: silver
+      schema: silver
       continuous: false              # Triggered mode (scheduled by Workflows); set true for streaming
-      development: "${bundle.target == 'dev'}"
       configuration:
         landing_path: "abfss://landing@${var.storage_account}.dfs.core.windows.net/sales/orders"
       libraries:
@@ -825,11 +823,9 @@ resources:
 
     silver_to_gold_dlt:
       name: "lakehouse-silver-to-gold-dlt-${var.env}"
-      description: "DLT pipeline: Silver CDF → dim_customer (SCD2) + dim_product (SCD1) + fact_sales + CLV. Replaces silver_to_gold.py."
       catalog: "${var.env}_lakehouse"
-      target: gold
+      schema: gold
       continuous: false
-      development: "${bundle.target == 'dev'}"
       libraries:
         - notebook:
             path: "src/dlt/silver_to_gold_dlt.py"
