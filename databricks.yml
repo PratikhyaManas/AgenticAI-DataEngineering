@@ -665,6 +665,74 @@ resources:
           max_retries: 1
 
     # ---------------------------------------------------------------------------
+    # Databricks Workflow: Agentic Orchestrator
+    # Polls governance.orchestrator_events every 15 minutes and routes each
+    # event to the appropriate sub-agent via GPT-4o planning.
+    # ---------------------------------------------------------------------------
+    agentic_orchestrator:
+      name: "lakehouse-agentic-orchestrator-${var.env}"
+      description: >
+        Multi-agent orchestrator: polls orchestrator_events and dispatches
+        DQ_FAILURE → dq_remediation, GDPR_ERASURE_REQUEST → gdpr_rtbf,
+        NL_QUERY → nl_to_sql, PIPELINE_FAILURE → pipeline_diagnosis,
+        SCHEMA_DRIFT → schema_drift_alert, MODEL_DRIFT → model_drift_retrain.
+        Uses GPT-4o as the routing planner with rule-based fallback.
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0/15 * * * ?"   # every 15 minutes
+        timezone_id: UTC
+
+      email_notifications:
+        on_failure:
+          - pratikhyamanas@gmail.com
+
+      environments:
+        - environment_key: orchestrator_env
+          spec:
+            dependencies:
+              - openai>=1.0.0
+              - pyyaml==6.0.1
+              - requests==2.32.3
+              - databricks-sql-connector>=3.0.0
+
+      tasks:
+        - task_key: run_orchestration_cycle
+          description: "Poll orchestrator_events and dispatch to sub-agents via GPT-4o planner"
+          environment_key: orchestrator_env
+          spark_python_task:
+            python_file: "src/agents/orchestrator_agent.py"
+            parameters:
+              - "--env"
+              - "${var.env}"
+              - "--openai-endpoint"
+              - "${var.openai_endpoint}"
+              - "--openai-key-secret"
+              - "openai-api-key"
+              - "--openai-secret-scope"
+              - "${var.openai_secret_scope}"
+              - "--openai-deployment"
+              - "${var.openai_deployment}"
+              - "--databricks-host"
+              - "${workspace.host}"
+              - "--databricks-http-path"
+              - "/sql/1.0/warehouses/lakehouse-serverless"
+              - "--token-secret-scope"
+              - "${var.openai_secret_scope}"
+              - "--token-secret-key"
+              - "databricks-sp-token"
+              - "--salt-secret-scope"
+              - "${var.anon_salt_secret_scope}"
+              - "--salt-secret-key"
+              - "gdpr-anonymization-salt"
+              - "--retraining-job-id"
+              - "${var.retraining_job_id}"
+              - "--batch-size"
+              - "20"
+          timeout_seconds: 600     # 10-minute cap per polling cycle
+          max_retries: 1
+          min_retry_interval_millis: 30000
+
+    # ---------------------------------------------------------------------------
     # Databricks Workflow: GDPR Right-to-be-Forgotten Agent
     # On-demand (no schedule) — triggered by privacy compliance team
     # ---------------------------------------------------------------------------
