@@ -15,7 +15,6 @@
   // Linting — ruff (replaces flake8 + isort + pyupgrade)
   // ===========================================================================
   "[python]": {
-    "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
       "source.fixAll.ruff": "explicit",
@@ -85,7 +84,6 @@
   // Terraform
   // ===========================================================================
   "[terraform]": {
-    "editor.defaultFormatter": "hashicorp.terraform",
     "editor.formatOnSave": true
   },
 
